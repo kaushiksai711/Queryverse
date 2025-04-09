@@ -1,0 +1,17 @@
+# Core dependencies
+fastapi==0.104.1
+uvicorn==0.23.2
+pydantic==2.4.2
+python-dotenv==1.0.0
+
+# Testing
+pytest==7.4.3
+pytest-cov==4.1.0
+httpx==0.25.1  # For FastAPI TestClient
+
+# Utilities
+loguru==0.7.2
+typing-extensions==4.8.0
+
+# Database mocks (for Phase 1)
+# Neo4j and Qdrant will be added in Phase 2 
