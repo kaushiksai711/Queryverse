@@ -8,9 +8,9 @@ import sys
 import os
 
 # Add the src directory to the path
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../../src')))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../../')))
 
-from agents.orchestrator import Orchestrator
+from src.agents.orchestrator import Orchestrator
 
 class TestOrchestrator(unittest.TestCase):
     """Test cases for the Orchestrator class."""

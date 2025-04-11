@@ -9,7 +9,7 @@ from fastapi import APIRouter, HTTPException, Depends, Request, BackgroundTasks
 from pydantic import BaseModel
 from typing import Dict, List, Optional, Any
 import logging
-from utils.logger import setup_logger
+from src.utils.logger import setup_logger
 
 router = APIRouter()
 logger = setup_logger(__name__)
@@ -58,7 +58,7 @@ async def process_query(message: ChatMessage, request: Request, background_tasks
         orchestrator = request.app.state.orchestrator
         if not orchestrator:
             # Get it from the main app object directly
-            from api.main import orchestrator
+            from src.api.main import orchestrator
             if not orchestrator:
                 raise HTTPException(status_code=500, detail="Orchestrator not initialized")
         

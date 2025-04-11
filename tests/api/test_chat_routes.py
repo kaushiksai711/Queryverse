@@ -10,10 +10,10 @@ import json
 from fastapi.testclient import TestClient
 
 # Add the src directory to the path
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../../src')))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../../')))
 
-from api.main import app
-from api.chat_routes import ChatMessage, ChatResponse, FeedbackRequest
+from src.api.main import app
+from src.api.chat_routes import ChatMessage, ChatResponse, FeedbackRequest
 
 class TestChatRoutes(unittest.TestCase):
     """Test cases for the chat API routes."""

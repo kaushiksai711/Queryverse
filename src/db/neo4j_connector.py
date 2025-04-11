@@ -1,207 +1,330 @@
 """
-Mock Neo4j connector for graph database functionality.
+Neo4j connector for graph database functionality.
 
-This module provides a mock implementation of a Neo4j connector
-for Phase 1, which will be replaced with a real connector in Phase 2.
+This module provides a real implementation of a Neo4j connector
+that connects to a Neo4j database instance.
 """
+
+import logging
+from neo4j import GraphDatabase
+from typing import List, Dict, Any, Optional
+
+logger = logging.getLogger(__name__)
 
 class Neo4jConnector:
     """
-    Mock connector for Neo4j graph database.
+    Connector for Neo4j graph database.
     
     Responsibilities:
-    - Provide a mock interface for Neo4j operations
-    - Simulate graph database queries with mock data
-    - Implement a basic API that mirrors the real Neo4j API
+    - Connect to Neo4j database
+    - Execute Cypher queries
+    - Manage database transactions
+    - Provide methods for common graph operations
     """
     
-    def __init__(self, uri=None, user=None, password=None):
+    def __init__(self, uri: str, user: str, password: str):
         """
-        Initialize the mock Neo4j connector.
+        Initialize the Neo4j connector.
         
         Args:
-            uri: Mock database URI
-            user: Mock username
-            password: Mock password
+            uri: Neo4j database URI
+            user: Neo4j username
+            password: Neo4j password
         """
-        self.uri = uri or "mock://localhost:7687"
+        self.uri = uri or "neo4j+s://593eb7b1.databases.neo4j.io"
         self.user = user or "neo4j"
-        self.password = password or "password"
+        self.password = password or "vwkSenzYtPp9bX6thdnJIU8BXXDm1WSfdqOIowYumRw"
+        self.driver = None
         self.connected = False
         
-        # Log initialization
-        print(f"[Mock] Initialized Neo4j connector to {self.uri}")
+        logger.info(f"Initializing Neo4j connector to {self.uri}")
     
-    def connect(self):
+    def connect(self) -> bool:
         """
-        Simulate connecting to Neo4j.
+        Connect to Neo4j database.
         
         Returns:
             True if connection successful
         """
-        # In Phase 1, this just sets a flag
-        self.connected = True
-        print("[Mock] Connected to Neo4j")
-        return True
+        try:
+            self.driver = GraphDatabase.driver(self.uri, auth=(self.user, self.password))
+            # Verify connection
+            self.driver.verify_connectivity()
+            self.connected = True
+            logger.info("Connected to Neo4j database")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to connect to Neo4j: {str(e)}")
+            self.connected = False
+            return False
     
-    def disconnect(self):
+    def disconnect(self) -> None:
         """
-        Simulate disconnecting from Neo4j.
+        Disconnect from Neo4j database.
         """
-        self.connected = False
-        print("[Mock] Disconnected from Neo4j")
+        if self.driver:
+            self.driver.close()
+            self.driver = None
+            self.connected = False
+            logger.info("Disconnected from Neo4j")
     
-    def execute_query(self, query, params=None):
+    def execute_query(self, query: str, params: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
         """
-        Simulate executing a Cypher query.
+        Execute a Cypher query.
         
         Args:
             query: Cypher query string
             params: Optional parameters for the query
             
         Returns:
-            Mock query results
+            Query results as a list of dictionaries
+        """
+        if not self.connected or not self.driver:
+            logger.warning("Not connected to Neo4j")
+            return []
+        
+        logger.debug(f"Executing query: {query}")
+        if params:
+            logger.debug(f"With parameters: {params}")
+        
+        try:
+            with self.driver.session() as session:
+                result = session.run(query, params or {})
+                return [record.data() for record in result]
+        except Exception as e:
+            logger.error(f"Query execution error: {str(e)}")
+            return []
+    
+    def create_entity(self, labels: List[str], properties: Dict[str, Any]) -> Optional[str]:
+        """
+        Create a new entity node.
+        
+        Args:
+            labels: List of node labels
+            properties: Node properties
+            
+        Returns:
+            ID of the created node, or None if creation failed
         """
         if not self.connected:
-            print("[Mock] Warning: Not connected to Neo4j")
-            return []
+            logger.warning("Not connected to Neo4j")
+            return None
         
-        # Log the query
-        print(f"[Mock] Executing query: {query}")
-        if params:
-            print(f"[Mock] With parameters: {params}")
-        
-        # Simulate different query types based on simple matching
-        query_lower = query.lower()
-        
-        # Mock MATCH query for entities
-        if "match (n:" in query_lower and "return n" in query_lower:
-            label = self._extract_label(query)
-            return self._mock_match_nodes(label)
-        
-        # Mock MATCH query for relationships
-        if "match (a)-[r:" in query_lower:
-            rel_type = self._extract_relationship_type(query)
-            return self._mock_match_relationships(rel_type)
-        
-        # Default empty result
-        return []
-    
-    def _extract_label(self, query):
+        labels_str = ':'.join(labels)
+        query = f"""
+        CREATE (n:{labels_str} $properties)
+        RETURN n.id as id
         """
-        Extract node label from a Cypher query.
         
-        Args:
-            query: Cypher query string
-            
-        Returns:
-            Extracted label or None
-        """
-        # Very simple extraction for Phase 1
-        query_lower = query.lower()
-        start_idx = query_lower.find("match (n:") + 8
-        end_idx = query_lower.find(")", start_idx)
-        
-        if start_idx >= 8 and end_idx > start_idx:
-            return query[start_idx:end_idx]
+        try:
+            results = self.execute_query(query, {"properties": properties})
+            if results and 'id' in results[0]:
+                return results[0]['id']
+        except Exception as e:
+            logger.error(f"Error creating entity: {str(e)}")
         
         return None
     
-    def _extract_relationship_type(self, query):
+    def create_relationship(self, from_id: str, to_id: str, rel_type: str, 
+                            properties: Optional[Dict[str, Any]] = None) -> bool:
         """
-        Extract relationship type from a Cypher query.
+        Create a relationship between two nodes.
         
         Args:
-            query: Cypher query string
+            from_id: ID of the source node
+            to_id: ID of the target node
+            rel_type: Relationship type
+            properties: Optional relationship properties
             
         Returns:
-            Extracted relationship type or None
+            True if relationship created successfully
         """
-        # Very simple extraction for Phase 1
-        query_lower = query.lower()
-        start_idx = query_lower.find("[r:") + 3
-        end_idx = query_lower.find("]", start_idx)
+        if not self.connected:
+            logger.warning("Not connected to Neo4j")
+            return False
         
-        if start_idx >= 3 and end_idx > start_idx:
-            return query[start_idx:end_idx]
+        query = """
+        MATCH (a), (b)
+        WHERE a.id = $from_id AND b.id = $to_id
+        CREATE (a)-[r:`{}`]->(b)
+        SET r = $properties
+        RETURN type(r) as type
+        """.format(rel_type)
         
-        return None
+        try:
+            results = self.execute_query(query, {
+                "from_id": from_id,
+                "to_id": to_id,
+                "properties": properties or {}
+            })
+            return len(results) > 0
+        except Exception as e:
+            logger.error(f"Error creating relationship: {str(e)}")
+            return False
     
-    def _mock_match_nodes(self, label):
+    def find_entity_by_id(self, entity_id: str) -> Optional[Dict[str, Any]]:
         """
-        Generate mock results for a node MATCH query.
+        Find an entity by its ID.
         
         Args:
-            label: Node label to match
+            entity_id: Entity ID
             
         Returns:
-            List of mock nodes
+            Entity data or None if not found
         """
-        if not label:
-            return []
-            
-        # Convert label to friendly format for comparison
-        label = label.strip().lower()
+        if not self.connected:
+            logger.warning("Not connected to Neo4j")
+            return None
         
-        # Mock data for different entity types
-        if label == "concept" or label == "knowledge":
-            return [
-                {"id": "knowledge_graph", "name": "Knowledge Graph", "type": "concept"},
-                {"id": "semantic_search", "name": "Semantic Search", "type": "concept"},
-                {"id": "vector_embeddings", "name": "Vector Embeddings", "type": "concept"}
-            ]
-        elif label == "technology":
-            return [
-                {"id": "neo4j", "name": "Neo4j", "type": "technology"},
-                {"id": "qdrant", "name": "Qdrant", "type": "technology"}
-            ]
+        query = """
+        MATCH (n {id: $id})
+        RETURN n
+        """
         
-        # Default empty result
-        return []
+        try:
+            results = self.execute_query(query, {"id": entity_id})
+            if results and 'n' in results[0]:
+                return results[0]['n']
+            return None
+        except Exception as e:
+            logger.error(f"Error finding entity: {str(e)}")
+            return None
     
-    def _mock_match_relationships(self, rel_type):
+    def find_entity_by_property(self, prop_name: str, prop_value: Any) -> List[Dict[str, Any]]:
         """
-        Generate mock results for a relationship MATCH query.
+        Find entities by a specific property value.
         
         Args:
-            rel_type: Relationship type to match
+            prop_name: Property name
+            prop_value: Property value to match
             
         Returns:
-            List of mock relationships
+            List of matching entities
         """
-        if not rel_type:
+        if not self.connected:
+            logger.warning("Not connected to Neo4j")
             return []
+        
+        query = f"""
+        MATCH (n)
+        WHERE n.{prop_name} = $value
+        RETURN n
+        """
+        
+        try:
+            results = self.execute_query(query, {"value": prop_value})
+            return [record['n'] for record in results]
+        except Exception as e:
+            logger.error(f"Error finding entity by property: {str(e)}")
+            return []
+    
+    def get_relationships(self, entity_id: str, rel_types: Optional[List[str]] = None, 
+                         direction: str = "both") -> List[Dict[str, Any]]:
+        """
+        Get relationships for an entity.
+        
+        Args:
+            entity_id: Entity ID
+            rel_types: Optional list of relationship types to filter
+            direction: "outgoing", "incoming", or "both"
             
-        # Convert type to friendly format for comparison
-        rel_type = rel_type.strip().upper()
+        Returns:
+            List of relationships
+        """
+        if not self.connected:
+            logger.warning("Not connected to Neo4j")
+            return []
         
-        # Mock data for different relationship types
-        if rel_type == "RELATED_TO":
-            return [
-                {
-                    "source": {"id": "knowledge_graph", "name": "Knowledge Graph"},
-                    "relationship": {"type": "RELATED_TO", "strength": 0.9},
-                    "target": {"id": "semantic_search", "name": "Semantic Search"}
-                },
-                {
-                    "source": {"id": "semantic_search", "name": "Semantic Search"},
-                    "relationship": {"type": "RELATED_TO", "strength": 0.9},
-                    "target": {"id": "knowledge_graph", "name": "Knowledge Graph"}
-                }
-            ]
-        elif rel_type == "USES":
-            return [
-                {
-                    "source": {"id": "knowledge_graph", "name": "Knowledge Graph"},
-                    "relationship": {"type": "USES", "required": True},
-                    "target": {"id": "graph_database", "name": "Graph Database"}
-                },
-                {
-                    "source": {"id": "semantic_search", "name": "Semantic Search"},
-                    "relationship": {"type": "USES", "strength": 0.95},
-                    "target": {"id": "vector_embeddings", "name": "Vector Embeddings"}
-                }
-            ]
+        # Build relationship type filter
+        rel_filter = ""
+        if rel_types and len(rel_types) > 0:
+            rel_filter = ":" + "|:".join(rel_types)
         
-        # Default empty result
-        return [] 
+        # Build query based on direction
+        if direction == "outgoing":
+            query = f"""
+            MATCH (a {{id: $id}})-[r{rel_filter}]->(b)
+            RETURN a, r, b
+            """
+        elif direction == "incoming":
+            query = f"""
+            MATCH (a)-[r{rel_filter}]->(b {{id: $id}})
+            RETURN a, r, b
+            """
+        else:  # both
+            query = f"""
+            MATCH (a {{id: $id}})-[r{rel_filter}]-(b)
+            RETURN a, r, b
+            """
+        
+        try:
+            results = self.execute_query(query, {"id": entity_id})
+            relationships = []
+            
+            for record in results:
+                source = record['a']
+                target = record['b']
+                relationship = record['r']
+                
+                rel_data = {
+                    'source': source['id'],
+                    'source_data': source,
+                    'target': target['id'],
+                    'target_data': target,
+                    'type': relationship.type,
+                    'properties': dict(relationship)
+                }
+                
+                relationships.append(rel_data)
+            
+            return relationships
+        except Exception as e:
+            logger.error(f"Error getting relationships: {str(e)}")
+            return []
+    
+    def execute_medical_data_setup(self) -> bool:
+        """
+        Set up medical data schema and constraints.
+        
+        Returns:
+            True if setup successful
+        """
+        if not self.connected:
+            logger.warning("Not connected to Neo4j")
+            return False
+        
+        # Create constraints and indexes
+        queries = [
+            # Create constraints
+            """CREATE CONSTRAINT entity_id IF NOT EXISTS
+               FOR (n:Entity) REQUIRE n.id IS UNIQUE""",
+            
+            """CREATE CONSTRAINT disease_id IF NOT EXISTS
+               FOR (d:Disease) REQUIRE d.id IS UNIQUE""",
+            
+            """CREATE CONSTRAINT symptom_id IF NOT EXISTS
+               FOR (s:Symptom) REQUIRE s.id IS UNIQUE""",
+            
+            """CREATE CONSTRAINT treatment_id IF NOT EXISTS
+               FOR (t:Treatment) REQUIRE t.id IS UNIQUE""",
+            
+            """CREATE CONSTRAINT medication_id IF NOT EXISTS
+               FOR (m:Medication) REQUIRE m.id IS UNIQUE""",
+            
+            # Create indexes
+            """CREATE INDEX entity_name IF NOT EXISTS
+               FOR (n:Entity) ON (n.name)""",
+            
+            """CREATE INDEX disease_name IF NOT EXISTS
+               FOR (d:Disease) ON (d.name)"""
+        ]
+        
+        success = True
+        for query in queries:
+            try:
+                self.execute_query(query)
+            except Exception as e:
+                logger.error(f"Error setting up schema: {str(e)}")
+                success = False
+        
+        return success 

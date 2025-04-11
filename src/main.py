@@ -3,15 +3,15 @@ Main application entry point with mock components for demonstration.
 This serves as the entry point for the Phase 1 demo of the FAQ Chatbot system.
 """
 
-from agents.orchestrator import Orchestrator
-from agents.retrieval_agent import RetrievalAgent
-from agents.query_interpreter import QueryInterpreter
-from knowledge.graph_manager import GraphManager
-from knowledge.embedding_service import EmbeddingService
-from rendering.text_renderer import TextRenderer
+from src.agents.orchestrator import Orchestrator
+from src.agents.retrieval_agent import RetrievalAgent
+from src.agents.query_interpreter import QueryInterpreter
+from src.knowledge.graph_manager import GraphManager
+from src.knowledge.embedding_service import EmbeddingService
+from src.rendering.text_renderer import TextRenderer
 import logging
-from utils.logger import setup_logger
-from utils.config import load_config
+from src.utils.logger import setup_logger
+from src.utils.config import load_config
 
 # Setup logging
 logger = setup_logger(__name__)

@@ -1,109 +1,241 @@
 """
-Mock Qdrant connector for vector database functionality.
+Qdrant connector for vector database functionality.
 
-This module provides a mock implementation of a Qdrant connector
-for Phase 1, which will be replaced with a real connector in Phase 2.
+This module provides a real implementation of a Qdrant connector
+that connects to a Qdrant vector database instance.
 """
+
+import logging
+import numpy as np
+from typing import List, Dict, Any, Optional, Union
+from qdrant_client import QdrantClient
+from qdrant_client.http.models import (
+    Distance, VectorParams, PointStruct, Filter, FieldCondition,
+    Range, MatchValue, CollectionInfo
+)
+
+logger = logging.getLogger(__name__)
 
 class QdrantConnector:
     """
-    Mock connector for Qdrant vector database.
+    Connector for Qdrant vector database.
     
     Responsibilities:
-    - Provide a mock interface for Qdrant operations
-    - Simulate vector similarity search with mock data
-    - Implement a basic API that mirrors the real Qdrant API
+    - Connect to Qdrant vector database
+    - Upload and manage vector embeddings
+    - Perform vector similarity search
+    - Associate metadata with vectors
     """
     
-    def __init__(self, url=None, api_key=None, collection_name="knowledge"):
+    def __init__(self, url: str, api_key: Optional[str] = None, collection_name: str = "medical_knowledge"):
         """
-        Initialize the mock Qdrant connector.
+        Initialize the Qdrant connector.
         
         Args:
-            url: Mock service URL
-            api_key: Mock API key
-            collection_name: Mock collection name
+            url: Qdrant service URL
+            api_key: Optional API key for authentication
+            collection_name: Collection name to use
         """
-        self.url = url or "mock://localhost:6333"
-        self.api_key = api_key
-        self.collection_name = collection_name
+        self.url = url or "https://90c18eba-c9f7-489f-9371-b46eea57639f.eu-central-1-0.aws.cloud.qdrant.io:6333"
+        self.api_key = api_key or "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2Nlc3MiOiJtIn0.4UBgGua3TwRyilImpsJkdkD0spqfhfyr4xld3aASbOU"
+        self.collection_name = collection_name or "medical_knowledge"
+        self.client = None
         self.connected = False
+        self.vector_size = 384  # Default for SentenceTransformers models
         
-        # Mock vectors for entities (simplified 3D vectors)
-        self.vectors = {
-            "knowledge_graph": [0.1, 0.2, 0.3],
-            "semantic_search": [0.15, 0.25, 0.35],
-            "vector_embeddings": [0.2, 0.3, 0.4],
-            "graph_database": [0.05, 0.15, 0.25],
-            "neo4j": [0.12, 0.22, 0.32],
-            "qdrant": [0.18, 0.28, 0.38]
-        }
-        
-        # Metadata for each vector
-        self.metadata = {
-            "knowledge_graph": {
-                "id": "knowledge_graph",
-                "name": "Knowledge Graph",
-                "description": "A knowledge graph is a network-based representation of knowledge.",
-                "category": "concept"
-            },
-            "semantic_search": {
-                "id": "semantic_search",
-                "name": "Semantic Search",
-                "description": "Semantic search understands the contextual meaning of terms.",
-                "category": "technique"
-            },
-            "vector_embeddings": {
-                "id": "vector_embeddings",
-                "name": "Vector Embeddings",
-                "description": "Vector embeddings are numerical representations of concepts.",
-                "category": "technique"
-            },
-            "graph_database": {
-                "id": "graph_database",
-                "name": "Graph Database",
-                "description": "A graph database stores data in a graph structure.",
-                "category": "technology"
-            },
-            "neo4j": {
-                "id": "neo4j",
-                "name": "Neo4j",
-                "description": "Neo4j is a popular graph database management system.",
-                "category": "technology"
-            },
-            "qdrant": {
-                "id": "qdrant",
-                "name": "Qdrant",
-                "description": "Qdrant is a vector similarity search engine.",
-                "category": "technology"
-            }
-        }
-        
-        # Log initialization
-        print(f"[Mock] Initialized Qdrant connector to {self.url} with collection {self.collection_name}")
+        logger.info(f"Initializing Qdrant connector to {self.url} with collection {self.collection_name}")
     
-    def connect(self):
+    def connect(self) -> bool:
         """
-        Simulate connecting to Qdrant.
+        Connect to Qdrant.
         
         Returns:
             True if connection successful
         """
-        # In Phase 1, this just sets a flag
-        self.connected = True
-        print("[Mock] Connected to Qdrant")
-        return True
+        try:
+            self.client = QdrantClient(url=self.url, api_key=self.api_key)
+            # Test connection by getting a list of collections
+            self.client.get_collections()
+            self.connected = True
+            logger.info("Connected to Qdrant")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to connect to Qdrant: {str(e)}")
+            self.connected = False
+            return False
     
-    def disconnect(self):
+    def disconnect(self) -> None:
         """
-        Simulate disconnecting from Qdrant.
+        Disconnect from Qdrant.
         """
-        self.connected = False
-        print("[Mock] Disconnected from Qdrant")
+        if self.client:
+            # Qdrant client doesn't have an explicit close method
+            # but we can reset the client and connection state
+            self.client = None
+            self.connected = False
+            logger.info("Disconnected from Qdrant")
     
-    def search(self, vector, top_k=5, filters=None):
+    def create_collection(self, vector_size: int = 384, distance: str = "Cosine") -> bool:
         """
-        Simulate vector similarity search.
+        Create a new collection for vector storage.
+        
+        Args:
+            vector_size: Dimension of vectors
+            distance: Distance metric ("Cosine", "Euclid", or "Dot")
+            
+        Returns:
+            True if creation successful
+        """
+        if not self.connected or not self.client:
+            logger.warning("Not connected to Qdrant")
+            return False
+        
+        self.vector_size = vector_size
+        
+        try:
+            # Check if collection already exists
+            collections = self.client.get_collections()
+            if self.collection_name in [c.name for c in collections.collections]:
+                logger.info(f"Collection {self.collection_name} already exists")
+                return True
+            
+            # Map distance string to Distance enum
+            distance_map = {
+                "Cosine": "Cosine",
+                "Euclid": "Euclidean",
+                "Dot": "Dot"
+            }
+            distance_type = distance_map.get(distance, "Cosine")
+            
+            # Create collection with specified parameters
+            self.client.create_collection(
+                collection_name=self.collection_name,
+                vectors_config=VectorParams(size=vector_size, distance=distance_type)
+            )
+            logger.info(f"Created collection {self.collection_name} with vector size {vector_size}")
+            return True
+        except Exception as e:
+            logger.error(f"Error creating collection: {str(e)}")
+            return False
+    
+    def delete_collection(self) -> bool:
+        """
+        Delete the collection.
+        
+        Returns:
+            True if deletion successful
+        """
+        if not self.connected or not self.client:
+            logger.warning("Not connected to Qdrant")
+            return False
+        
+        try:
+            self.client.delete_collection(collection_name=self.collection_name)
+            logger.info(f"Deleted collection {self.collection_name}")
+            return True
+        except Exception as e:
+            logger.error(f"Error deleting collection: {str(e)}")
+            return False
+    
+    def get_collection_info(self) -> Optional[CollectionInfo]:
+        """
+        Get information about the collection.
+        
+        Returns:
+            Collection information or None if error
+        """
+        if not self.connected or not self.client:
+            logger.warning("Not connected to Qdrant")
+            return None
+        
+        try:
+            return self.client.get_collection(collection_name=self.collection_name)
+        except Exception as e:
+            logger.error(f"Error getting collection info: {str(e)}")
+            return None
+    
+    def upsert(self, id: str, vector: List[float], metadata: Optional[Dict[str, Any]] = None) -> bool:
+        """
+        Insert or update a vector in the collection.
+        
+        Args:
+            id: Unique identifier for the vector
+            vector: Vector to store
+            metadata: Associated metadata
+            
+        Returns:
+            True if operation successful
+        """
+        if not self.connected or not self.client:
+            logger.warning("Not connected to Qdrant")
+            return False
+        
+        try:
+            # Convert string ID to a unique integer ID if needed
+            point_id = id if isinstance(id, int) else hash(id) & 0xffffffff
+            
+            # Create point with vector and metadata
+            point = PointStruct(
+                id=point_id,
+                vector=vector,
+                payload=metadata or {}
+            )
+            
+            # Insert the point
+            self.client.upsert(
+                collection_name=self.collection_name,
+                points=[point]
+            )
+            
+            logger.debug(f"Upserted vector for ID: {id}")
+            return True
+        except Exception as e:
+            logger.error(f"Error upserting vector: {str(e)}")
+            return False
+    
+    def batch_upsert(self, items: List[Dict[str, Any]]) -> bool:
+        """
+        Insert or update multiple vectors in batch.
+        
+        Args:
+            items: List of dictionaries with id, vector, and metadata
+            
+        Returns:
+            True if operation successful
+        """
+        if not self.connected or not self.client:
+            logger.warning("Not connected to Qdrant")
+            return False
+        
+        try:
+            points = []
+            for item in items:
+                # Convert string ID to a unique integer ID if needed
+                point_id = item['id'] if isinstance(item['id'], int) else hash(item['id']) & 0xffffffff
+                
+                point = PointStruct(
+                    id=point_id,
+                    vector=item['vector'],
+                    payload=item.get('metadata', {})
+                )
+                points.append(point)
+            
+            # Insert the points in batch
+            self.client.upsert(
+                collection_name=self.collection_name,
+                points=points
+            )
+            
+            logger.info(f"Batch upserted {len(points)} vectors")
+            return True
+        except Exception as e:
+            logger.error(f"Error batch upserting vectors: {str(e)}")
+            return False
+    
+    def search(self, vector: List[float], top_k: int = 5, 
+              filters: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+        """
+        Perform vector similarity search.
         
         Args:
             vector: Query vector
@@ -113,126 +245,98 @@ class QdrantConnector:
         Returns:
             List of search results with similarity scores
         """
-        if not self.connected:
-            print("[Mock] Warning: Not connected to Qdrant")
+        if not self.connected or not self.client:
+            logger.warning("Not connected to Qdrant")
             return []
         
-        # Log the search
-        print(f"[Mock] Searching with vector: {vector}")
-        if filters:
-            print(f"[Mock] With filters: {filters}")
-        
-        # Calculate mock similarity scores
-        # In a real implementation, this would use cosine similarity or other distance metrics
-        results = []
-        for entity_id, entity_vector in self.vectors.items():
-            # Skip if it doesn't pass filters
-            if not self._passes_filters(entity_id, filters):
-                continue
-                
-            # Calculate a simple similarity score
-            similarity = self._calculate_similarity(vector, entity_vector)
+        try:
+            # Convert filters to Qdrant filter format
+            qdrant_filter = self._convert_filters(filters) if filters else None
             
-            # Add to results
-            if similarity > 0:
-                results.append({
-                    "id": entity_id,
-                    "score": similarity,
-                    "metadata": self.metadata.get(entity_id, {})
-                })
-        
-        # Sort by score descending
-        results.sort(key=lambda x: x["score"], reverse=True)
-        
-        # Return top k results
-        return results[:top_k]
+            # Perform search
+            search_results = self.client.search(
+                collection_name=self.collection_name,
+                query_vector=vector,
+                limit=top_k,
+                query_filter=qdrant_filter
+            )
+            
+            # Format results
+            results = []
+            for result in search_results:
+                result_dict = {
+                    "id": result.id,
+                    "score": result.score,
+                    "metadata": result.payload
+                }
+                results.append(result_dict)
+            
+            return results
+        except Exception as e:
+            logger.error(f"Error performing search: {str(e)}")
+            return []
     
-    def _calculate_similarity(self, vec1, vec2):
+    def _convert_filters(self, filters: Dict[str, Any]) -> Filter:
         """
-        Calculate a mock similarity score between two vectors.
+        Convert simple filters to Qdrant filter format.
         
         Args:
-            vec1: First vector
-            vec2: Second vector
+            filters: Dictionary of filter conditions
             
         Returns:
-            Similarity score between 0 and 1
+            Qdrant Filter object
         """
-        # Very simple mock similarity for Phase 1
-        # In a real implementation, this would use cosine similarity
-        
-        # Ensure vectors have the same length
-        min_length = min(len(vec1), len(vec2))
-        vec1 = vec1[:min_length]
-        vec2 = vec2[:min_length]
-        
-        # Calculate a simple similarity based on vector difference
-        total_diff = sum(abs(a - b) for a, b in zip(vec1, vec2))
-        max_possible_diff = min_length  # Assuming values between 0 and 1
-        
-        # Convert difference to similarity (1 - normalized difference)
-        similarity = 1.0 - (total_diff / max_possible_diff)
-        
-        # Ensure it's between 0 and 1
-        return max(0.0, min(1.0, similarity))
-    
-    def _passes_filters(self, entity_id, filters):
-        """
-        Check if an entity passes the specified filters.
-        
-        Args:
-            entity_id: Entity identifier
-            filters: Filters to apply
-            
-        Returns:
-            True if the entity passes all filters
-        """
-        # If no filters, everything passes
         if not filters:
-            return True
-            
-        # Get entity metadata
-        metadata = self.metadata.get(entity_id, {})
+            return None
         
-        # Check each filter
+        conditions = []
+        
         for field, value in filters.items():
-            if field not in metadata:
-                return False
-                
             if isinstance(value, list):
-                # For list values, check if any match
-                if metadata[field] not in value:
-                    return False
+                # For list values, use any match
+                conditions.append(FieldCondition(
+                    key=field,
+                    match=MatchValue(any=value)
+                ))
+            elif isinstance(value, dict) and ('min' in value or 'max' in value):
+                # For range values
+                range_kwargs = {}
+                if 'min' in value:
+                    range_kwargs['gte'] = value['min']
+                if 'max' in value:
+                    range_kwargs['lte'] = value['max']
+                
+                conditions.append(FieldCondition(
+                    key=field,
+                    range=Range(**range_kwargs)
+                ))
             else:
-                # For single values, check exact match
-                if metadata[field] != value:
-                    return False
+                # For exact match
+                conditions.append(FieldCondition(
+                    key=field,
+                    match=MatchValue(value=value)
+                ))
         
-        # If we get here, all filters passed
-        return True
+        return Filter(must=conditions)
     
-    def upsert(self, id, vector, metadata=None):
+    def execute_medical_data_setup(self, vector_size: int = 384) -> bool:
         """
-        Simulate upserting a vector to the collection.
+        Set up the collection for medical data vectors.
         
         Args:
-            id: Entity identifier
-            vector: Vector to store
-            metadata: Associated metadata
+            vector_size: Dimension of the vectors
             
         Returns:
-            Success flag
+            True if setup successful
         """
         if not self.connected:
-            print("[Mock] Warning: Not connected to Qdrant")
+            logger.warning("Not connected to Qdrant")
             return False
         
-        # Log the operation
-        print(f"[Mock] Upserting vector for ID: {id}")
-        
-        # Store the vector and metadata
-        self.vectors[id] = vector
-        if metadata:
-            self.metadata[id] = metadata
-        
-        return True 
+        try:
+            # Create or recreate the collection
+            self.vector_size = vector_size
+            return self.create_collection(vector_size=vector_size)
+        except Exception as e:
+            logger.error(f"Error setting up medical data collection: {str(e)}")
+            return False 

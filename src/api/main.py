@@ -9,14 +9,14 @@ from fastapi import FastAPI, HTTPException, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 import logging
-from utils.logger import setup_logger
-from utils.config import load_config
-from agents.orchestrator import Orchestrator
-from agents.retrieval_agent import RetrievalAgent
-from agents.query_interpreter import QueryInterpreter
-from knowledge.graph_manager import GraphManager
-from knowledge.embedding_service import EmbeddingService
-from rendering.text_renderer import TextRenderer
+from src.utils.logger import setup_logger
+from src.utils.config import load_config
+from src.agents.orchestrator import Orchestrator
+from src.agents.retrieval_agent import RetrievalAgent
+from src.agents.query_interpreter import QueryInterpreter
+from src.knowledge.graph_manager import GraphManager
+from src.knowledge.embedding_service import EmbeddingService
+from src.rendering.text_renderer import TextRenderer
 
 # Setup logger
 logger = setup_logger(__name__)
@@ -91,10 +91,10 @@ async def health_check():
     return {"status": "healthy"}
 
 # Import and include routers
-from .chat_routes import router as chat_router
+from src.api.chat_routes import router as chat_router
 
 # Include routers
 app.include_router(chat_router, prefix="/api/chat", tags=["chat"])
 
 if __name__ == "__main__":
-    uvicorn.run("api.main:app", host="0.0.0.0", port=8000, reload=True) 
+    uvicorn.run("src.api.main:app", host="0.0.0.0", port=8000, reload=True) 
