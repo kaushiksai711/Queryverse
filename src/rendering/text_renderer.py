@@ -1,115 +1,73 @@
 """
-Text Renderer for formatting text responses.
+Text renderer for formatting responses.
 
-This module provides functionality for rendering responses
-in text format with appropriate formatting and attribution.
+This module provides functionality for formatting text responses
+in a consistent and readable way.
 """
+
+from typing import Dict, Any, List
+from src.utils.logger import setup_logger
+
+logger = setup_logger("text_renderer")
 
 class TextRenderer:
     """
-    Renderer for text-based responses.
+    Renders text responses in a consistent format.
     
     Responsibilities:
-    - Format text responses from retrieval results
-    - Add source attribution to responses
-    - Handle different text formats (plain text, markdown)
-    - Format confidence information when needed
+    - Format success responses
+    - Format error responses
+    - Format no-results responses
+    - Format knowledge base responses
     """
     
     def __init__(self):
-        """
-        Initialize the text renderer.
-        """
-        pass
+        """Initialize the text renderer"""
+        self.logger = logger
     
-    def render(self, results, context=None):
+    def format_response(self, response: Dict[str, Any]) -> str:
         """
-        Render retrieval results as a text response.
+        Format a response into a readable text format.
         
         Args:
-            results: Dictionary containing retrieval results and metadata
-            context: Optional context information
+            response: Response dictionary from the retrieval agent
             
         Returns:
             Formatted text response
         """
-        # Default empty context if none provided
-        if context is None:
-            context = {}
+        if response.get("status") == "error":
+            return self._format_error(response)
         
-        # Extract results data
-        retrieved_items = results.get('results', [])
-        confidence = results.get('confidence', 0)
-        sources = results.get('sources', [])
-        query = results.get('query', {})
+        if not response.get("knowledge"):
+            return self._format_no_results()
         
-        # If no results, return a default message
-        if not retrieved_items:
-            return "I'm sorry, I couldn't find any information on that topic."
+        if isinstance(response["knowledge"], str):
+            return response["knowledge"]
         
-        # Generate the main response text
-        response_text = self._generate_response_text(retrieved_items, query)
-        
-        # Add source attribution if available
-        if sources:
-            response_text += self._format_sources(sources)
-        
-        # Add confidence statement for low confidence results
-        if confidence < 0.7:
-            response_text += "\n\nNote: I'm not entirely confident in this answer. You may want to verify this information."
-        
-        return response_text
+        return self._format_knowledge(response["knowledge"])
     
-    def _generate_response_text(self, retrieved_items, query):
-        """
-        Generate the main response text from retrieved items.
-        
-        Args:
-            retrieved_items: List of retrieval results
-            query: Original query information
-            
-        Returns:
-            Generated response text
-        """
-        # For Phase 1, we'll use a simple approach that combines the top results
-        
-        # Get the top result
-        top_result = retrieved_items[0] if retrieved_items else None
-        
-        if not top_result:
-            return "I'm sorry, I couldn't find any specific information on that topic."
-        
-        # Use the text from the top result as the main response
-        response = top_result.get('text', '')
-        
-        # If we have more results, add supplementary information
-        if len(retrieved_items) > 1:
-            # Add information from the second result if it's different enough
-            second_result = retrieved_items[1]
-            second_text = second_result.get('text', '')
-            
-            # Only add if it provides new information (simple check for Phase 1)
-            if second_text and len(second_text) > 20 and second_text != response:
-                response += "\n\nAdditionally: " + second_text
-        
-        return response
+    def _format_error(self, response: Dict[str, Any]) -> str:
+        """Format an error response"""
+        error_msg = response.get("error", "An unknown error occurred")
+        return f"I'm sorry, I encountered an error: {error_msg}"
     
-    def _format_sources(self, sources):
-        """
-        Format source attributions.
+    def _format_no_results(self) -> str:
+        """Format a no-results response"""
+        return "I couldn't find specific information about that in my knowledge base. Could you please rephrase your question or provide more details?"
+    
+    def _format_knowledge(self, knowledge: List[Dict[str, Any]]) -> str:
+        """Format knowledge base results"""
+        if not knowledge:
+            return self._format_no_results()
         
-        Args:
-            sources: List of source information
+        formatted_results = []
+        for result in knowledge:
+            source = result.get("source", "unknown")
+            content = result.get("content", "")
             
-        Returns:
-            Formatted source attribution text
-        """
-        if not sources:
-            return ""
+            if source == "graph":
+                formatted_results.append(f"From medical database: {content}")
+            else:
+                formatted_results.append(content)
         
-        # Format sources for Phase 1 (simple list)
-        source_text = "\n\nSources:"
-        for source in sources:
-            source_text += f"\n- {source}"
-        
-        return source_text 
+        return "\n\n".join(formatted_results) 

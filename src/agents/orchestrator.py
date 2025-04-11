@@ -6,6 +6,12 @@ the interaction between the query interpreter, retrieval agent,
 and renderer components.
 """
 
+from typing import Dict, Any
+from src.utils.logger import setup_logger
+from src.agents.query_interpreter import QueryInterpreter
+from src.agents.query_decomposer import QueryDecomposer
+from src.agents.retrieval_agent import RetrievalAgent
+
 class Orchestrator:
     """
     Orchestrator class for coordinating the workflow between different agents.
@@ -17,46 +23,82 @@ class Orchestrator:
     - Deliver final responses using appropriate renderers
     """
     
-    def __init__(self, query_interpreter, retrieval_agent, text_renderer):
-        """
-        Initialize the orchestrator with required components.
-        
-        Args:
-            query_interpreter: Component for understanding user queries
-            retrieval_agent: Component for retrieving information
-            text_renderer: Component for rendering text responses
-        """
+    def __init__(self, query_interpreter: QueryInterpreter, query_decomposer: QueryDecomposer, retrieval_agent: RetrievalAgent):
+        """Initialize the orchestrator with required agents"""
         self.query_interpreter = query_interpreter
+        self.query_decomposer = query_decomposer
         self.retrieval_agent = retrieval_agent
-        self.text_renderer = text_renderer
+        self.logger = setup_logger("orchestrator")
     
-    def process_query(self, query, context=None):
+    async def process_query(self, query: str) -> Dict[str, Any]:
         """
-        Process a user query and return a response.
+        Process a user query through the complete workflow.
         
         Args:
-            query: User's question or request as a string
-            context: Optional context information (e.g., user ID, preferences)
+            query: The user's query string
             
         Returns:
-            Formatted response as a string
+            Dict containing processing results including:
+            - type: The type of query (single or complex)
+            - query: The original query
+            - interpretation: The query interpretation
+            - sub_questions: List of decomposed sub-questions (if complex)
+            - results: List of results for each sub-question (if complex)
+            - knowledge: Retrieved knowledge (if single)
+            - response: The final response text
+            - sources: List of sources used for the response
         """
-        # Default empty context if none provided
-        if context is None:
-            context = {}
-        
-        # Interpret the query
-        interpreted_query = self.query_interpreter.interpret(query, context)
-        
-        # Retrieve information
-        retrieval_results = self.retrieval_agent.retrieve(interpreted_query, context)
-        
-        # Check if we have sufficient information
-        if retrieval_results.get('confidence', 0) < 0.5:
-            # For Phase 1, we'll just acknowledge insufficient information
-            return "I'm sorry, I don't have enough information to answer that question confidently."
-        
-        # Render the response
-        response = self.text_renderer.render(retrieval_results, context)
-        
-        return response 
+        try:
+            # Step 1: Interpret the query
+            interpretation = await self.query_interpreter.interpret(query)
+            self.logger.info(f"Query interpretation: {interpretation}")
+            
+            # Step 2: Decompose the query if complex
+            decomposition = await self.query_decomposer.decompose(query)
+            
+            if decomposition["is_complex"]:
+                # Process complex query
+                results = []
+                responses = []
+                all_sources = set()
+                for sub_question in decomposition["sub_questions"]:
+                    sub_result = await self.retrieval_agent.retrieve(sub_question)
+                    results.append({
+                        "question": sub_question,
+                        "knowledge": sub_result
+                    })
+                    if "response" in sub_result:
+                        responses.append(sub_result["response"])
+                    if "sources" in sub_result:
+                        all_sources.update(sub_result["sources"])
+                
+                return {
+                    "type": "complex",
+                    "query": query,
+                    "interpretation": interpretation,
+                    "sub_questions": decomposition["sub_questions"],
+                    "results": results,
+                    "response": " ".join(responses) if responses else "No information found",
+                    "sources": list(all_sources)
+                }
+            else:
+                # Process single query
+                knowledge = await self.retrieval_agent.retrieve(query)
+                
+                return {
+                    "type": "single",
+                    "query": query,
+                    "interpretation": interpretation,
+                    "knowledge": knowledge,
+                    "response": knowledge.get("response", "No information found"),
+                    "sources": knowledge.get("sources", [])
+                }
+            
+        except Exception as e:
+            self.logger.error(f"Error processing query: {str(e)}")
+            return {
+                "error": str(e),
+                "query": query,
+                "response": f"Error processing query: {str(e)}",
+                "sources": []
+            } 

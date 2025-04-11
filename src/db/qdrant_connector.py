@@ -45,6 +45,15 @@ class QdrantConnector:
         
         logger.info(f"Initializing Qdrant connector to {self.url} with collection {self.collection_name}")
     
+    def is_connected(self) -> bool:
+        """
+        Check if the connector is connected to Qdrant.
+        
+        Returns:
+            True if connected, False otherwise
+        """
+        return self.connected and self.client is not None
+    
     def connect(self) -> bool:
         """
         Connect to Qdrant.
@@ -53,9 +62,12 @@ class QdrantConnector:
             True if connection successful
         """
         try:
-            self.client = QdrantClient(url=self.url, api_key=self.api_key)
-            # Test connection by getting a list of collections
-            self.client.get_collections()
+            self.client = QdrantClient(
+                url=self.url,
+                api_key=self.api_key
+            )
+            # Verify connection by getting collection info
+            self.client.get_collection(self.collection_name)
             self.connected = True
             logger.info("Connected to Qdrant")
             return True

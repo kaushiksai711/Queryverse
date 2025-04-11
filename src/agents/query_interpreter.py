@@ -6,6 +6,10 @@ which is responsible for understanding user queries and extracting
 relevant entities, intents, and other information.
 """
 
+from typing import Dict, Any, List
+from src.utils.logger import setup_logger
+import spacy
+
 class QueryInterpreter:
     """
     Agent responsible for interpreting user queries.
@@ -19,65 +23,188 @@ class QueryInterpreter:
     
     def __init__(self):
         """
-        Initialize the query interpreter.
+        Initialize the query interpreter with NLP model
         """
-        pass
-    
-    def interpret(self, query, context=None):
-        """
-        Interpret a user query and extract structured information.
+        self.nlp = spacy.load("en_core_web_sm")
+        self.logger = setup_logger("query_interpreter")
         
-        Args:
-            query: Raw user query as a string
-            context: Optional context information
-            
-        Returns:
-            Dictionary containing interpreted query information
-        """
-        # Default empty context if none provided
-        if context is None:
-            context = {}
-        
-        # For Phase 1, implement basic interpretation
-        entities = self._extract_entities(query)
-        intent = self._identify_intent(query)
-        
-        # Create structured representation
-        interpreted_query = {
-            'text': query,
-            'entities': entities,
-            'intent': intent,
-            'complexity': self._assess_complexity(query, entities)
+        # Define intent patterns
+        self.intent_patterns = {
+            "symptoms": ["symptom", "sign", "manifestation", "indication"],
+            "diagnosis": ["diagnose", "cause", "reason", "why"],
+            "treatment": ["treat", "cure", "medicine", "therapy", "medication"],
+            "prevention": ["prevent", "avoid", "protection", "prophylaxis"],
+            "information": ["what", "how", "when", "where", "who"]
         }
         
-        return interpreted_query
+        # Define medical entity patterns
+        self.medical_entities = [
+            # General medical terms
+            "disease", "condition", "symptom", "treatment", "medication",
+            "virus", "viruses", "bacteria", "infection", "syndrome", "disorder",
+            
+            # Common symptoms
+            "fever", "pain", "cough", "headache", "fatigue", "nausea",
+            "dizziness", "rash", "inflammation",
+            
+            # Common diseases
+            "diabetes", "asthma", "cancer", "flu", "cold", "covid-19",
+            "pneumonia", "bronchitis", "malaria", "hypertension",
+            
+            # Medications
+            "aspirin", "ibuprofen", "paracetamol", "antibiotic",
+            
+            # Body parts
+            "heart", "lung", "liver", "kidney", "brain", "stomach",
+            
+            # Compound terms
+            "heart disease", "lung cancer", "blood pressure",
+            "immune system", "respiratory system"
+        ]
     
-    def _extract_entities(self, query):
+    async def interpret(self, query: str) -> Dict[str, Any]:
         """
-        Extract entities from the user query.
+        Interpret a user query to understand intent and extract entities.
         
         Args:
-            query: Raw user query as a string
+            query: The user's query string
             
         Returns:
-            List of extracted entities
+            Dict containing interpretation results including:
+            - intent: The primary intent of the query
+            - entities: List of extracted entities
+            - query_type: Type of query (factual, comparative, causal, temporal)
+            - original_query: The original query
         """
-        # Mock implementation for Phase 1
-        # In a real implementation, this would use NER or similar techniques
+        try:
+            if not query:
+                return {
+                    "error": "Empty query provided",
+                    "query": query
+                }
+            
+            if not isinstance(query, str):
+                return {
+                    "error": f"Invalid query type: {type(query)}",
+                    "query": query
+                }
+            
+            # Process query with NLP model
+            doc = self.nlp(query)
+            
+            # Extract entities using both NER and pattern matching
+            entities = self._extract_entities(doc)
+            
+            # Determine query type
+            query_type = self._determine_query_type(doc)
+            
+            # Extract intent
+            intent = self._extract_intent(doc)
+            
+            interpretation = {
+                "intent": intent,
+                "entities": entities,
+                "query_type": query_type,
+                "original_query": query
+            }
+            
+            self.logger.info(f"Interpreted query: {interpretation}")
+            return interpretation
+            
+        except Exception as e:
+            self.logger.error(f"Error interpreting query: {str(e)}")
+            return {
+                "error": str(e),
+                "query": query
+            }
+    
+    def _determine_query_type(self, doc) -> str:
+        """Determine the type of query based on linguistic patterns"""
+        # Check for comparative patterns
+        if any(token.text.lower() in ["vs", "versus", "compared", "compare"] for token in doc):
+            return "comparative"
         
-        # Simple keyword extraction based on common terms in the knowledge domain
-        knowledge_terms = [
-            "knowledge graph", "semantic search", "vector embeddings",
-            "graph database", "neo4j", "qdrant", "knowledge base",
-            "chatbot", "retrieval", "research"
-        ]
+        # Check for causal patterns
+        if any(token.dep_ == "mark" and token.text.lower() in ["because", "since", "as"] for token in doc):
+            return "causal"
         
-        found_entities = []
-        for term in knowledge_terms:
-            if term.lower() in query.lower():
-                found_entities.append(term)
+        # Check for temporal patterns
+        if any(token.dep_ == "advmod" and token.text.lower() in ["when", "how long"] for token in doc):
+            return "temporal"
         
-        return found_entities
+        # Check for causal patterns in the text (not just dependency parsing)
+        query_text = doc.text.lower()
+        if any(word in query_text for word in ["because", "since", "as", "due to", "caused by", "why"]):
+            return "causal"
+        
+        # Default to factual
+        return "factual"
+    
+    def _extract_intent(self, doc) -> str:
+        """Extract the primary intent from the query"""
+        # Convert query to lowercase for matching
+        query_text = doc.text.lower()
+        
+        # Check for temporal patterns first
+        if any(token.dep_ == "advmod" and token.text.lower() in ["when", "how long"] for token in doc):
+            return "information"
+        
+        # Check for specific intent patterns
+        for intent, patterns in self.intent_patterns.items():
+            if any(pattern in query_text for pattern in patterns):
+                return intent
+        
+        # Check for symptom-related patterns
+        if "symptom" in query_text or "sign" in query_text:
+            return "symptoms"
+        
+        # Check for treatment-related patterns
+        if "treat" in query_text or "cure" in query_text or "medicine" in query_text:
+            return "treatment"
+        
+        # Default to information
+        return "information"
+    
+    def _extract_entities(self, doc) -> List[str]:
+        """Extract medical entities from the query using NER and pattern matching"""
+        entities = []
+        
+        # Extract named entities from spaCy
+        for ent in doc.ents:
+            if ent.label_ in ["DISEASE", "ORG", "PRODUCT"]:
+                # Preserve original case for entities like COVID-19
+                entities.append(ent.text)
+        
+        # Pattern matching for medical terms
+        text = doc.text.lower()
+        
+        # Check for compound terms first
+        for entity in self.medical_entities:
+            if " " in entity and entity in text:
+                entities.append(entity)
+        
+        # Then check individual tokens
+        for token in doc:
+            token_text = token.text.lower()
+            # Check if token is a medical entity
+            if token_text in self.medical_entities:
+                # Use original case from the text
+                entities.append(token.text)
+            # Check compound words (e.g., "heart disease")
+            if token.dep_ == "compound":
+                compound = f"{token.text} {token.head.text}".lower()
+                if compound in self.medical_entities:
+                    # Use original case from the text
+                    entities.append(f"{token.text} {token.head.text}")
+        
+        # Remove duplicates while preserving order and case
+        seen = set()
+        result = []
+        for entity in entities:
+            if entity.lower() not in seen:
+                seen.add(entity.lower())
+                result.append(entity)
+        return result
     
     def _identify_intent(self, query):
         """

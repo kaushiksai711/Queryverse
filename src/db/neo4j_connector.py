@@ -8,6 +8,7 @@ that connects to a Neo4j database instance.
 import logging
 from neo4j import GraphDatabase
 from typing import List, Dict, Any, Optional
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +23,7 @@ class Neo4jConnector:
     - Provide methods for common graph operations
     """
     
-    def __init__(self, uri: str, user: str, password: str):
+    def __init__(self, uri: str = None, user: str = None, password: str = None):
         """
         Initialize the Neo4j connector.
         
@@ -31,13 +32,26 @@ class Neo4jConnector:
             user: Neo4j username
             password: Neo4j password
         """
-        self.uri = uri or "neo4j+s://593eb7b1.databases.neo4j.io"
-        self.user = user or "neo4j"
-        self.password = password or "vwkSenzYtPp9bX6thdnJIU8BXXDm1WSfdqOIowYumRw"
+        self.uri = uri or os.getenv("NEO4J_URI", "bolt://localhost:7687")
+        self.user = user or os.getenv("NEO4J_USER", "neo4j")
+        self.password = password or os.getenv("NEO4J_PASSWORD", "password")
         self.driver = None
         self.connected = False
         
         logger.info(f"Initializing Neo4j connector to {self.uri}")
+        
+        # Connect and set up medical data
+        if self.connect():
+            self.execute_medical_data_setup()
+    
+    def is_connected(self) -> bool:
+        """
+        Check if the connector is connected to Neo4j.
+        
+        Returns:
+            True if connected, False otherwise
+        """
+        return self.connected and self.driver is not None
     
     def connect(self) -> bool:
         """
@@ -90,7 +104,9 @@ class Neo4jConnector:
         try:
             with self.driver.session() as session:
                 result = session.run(query, params or {})
-                return [record.data() for record in result]
+                records = [record.data() for record in result]
+                logger.debug(f"Query returned {len(records)} records")
+                return records
         except Exception as e:
             logger.error(f"Query execution error: {str(e)}")
             return []

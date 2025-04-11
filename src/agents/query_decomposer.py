@@ -2,131 +2,191 @@
 Query Decomposer for breaking down complex queries into simpler sub-questions.
 
 This module contains the implementation of the query decomposer
-which is responsible for analyzing complex queries and breaking them
-down into simpler sub-questions that can be answered individually.
+which is responsible for breaking down complex queries into simpler
+sub-questions that can be processed individually.
 """
+
+from typing import Dict, Any, List
+from src.utils.logger import setup_logger
+import re
 
 class QueryDecomposer:
     """
     Agent responsible for decomposing complex queries into simpler sub-questions.
     
     Responsibilities:
-    - Identify if a query is complex enough to require decomposition
-    - Break down complex queries into manageable sub-questions
-    - Maintain relationships between sub-questions and original query
-    - Prioritize sub-questions for efficient processing
+    - Identify complex queries that need decomposition
+    - Break down queries into simpler sub-questions
+    - Maintain context and relationships between sub-questions
+    - Handle different types of complex queries (comparative, causal, temporal)
     """
     
-    def __init__(self):
+    def __init__(self, query_interpreter):
         """
-        Initialize the query decomposer.
-        """
-        pass
-    
-    def decompose(self, query, context=None):
-        """
-        Decompose a complex query into simpler sub-questions.
+        Initialize the query decomposer with a query interpreter
         
         Args:
-            query: Interpreted query object from query interpreter
-            context: Optional context information
-            
-        Returns:
-            List of sub-questions if query is complex, otherwise returns the original query
+            query_interpreter: An instance of QueryInterpreter
         """
-        # Default empty context if none provided
-        if context is None:
-            context = {}
-        
-        # Only decompose if query is complex
-        if query.get('complexity') != 'complex':
-            return [query]  # Return original query if not complex
-        
-        # Simplified mock implementation for Phase 1
-        query_text = query.get('text', '')
-        entities = query.get('entities', [])
-        intent = query.get('intent', {})
-        
-        # Generate sub-questions based on simple patterns
-        sub_questions = self._generate_sub_questions(query_text, entities, intent)
-        
-        # Prioritize sub-questions
-        prioritized = self._prioritize_sub_questions(sub_questions)
-        
-        return prioritized
+        self.interpreter = query_interpreter
+        self.logger = setup_logger("query_decomposer")
     
-    def _generate_sub_questions(self, query_text, entities, intent):
-        """
-        Generate sub-questions from a complex query.
+    async def decompose(self, query: str) -> Dict[str, Any]:
+        """Decompose a query into sub-questions if it's complex"""
+        if not query or not query.strip():
+            return {
+                "is_complex": False,
+                "sub_questions": [],
+                "original_query": query
+            }
+
+        # Interpret the query first
+        interpretation = await self.interpreter.interpret(query)
         
-        Args:
-            query_text: Original query text
-            entities: Extracted entities from the query
-            intent: Identified intent of the query
-            
-        Returns:
-            List of sub-question objects
-        """
-        # Mock implementation for Phase 1
-        # In a real implementation, this would use more sophisticated techniques
+        # If it's a simple query with one entity and no complex aspects, return as is
+        if (interpretation["query_type"] == "factual" and 
+            len(interpretation["entities"]) == 1 and
+            not any(word in query.lower() for word in ["vs", "compared", "because", "when", "how long"]) and
+            len([word for word in ["symptoms", "causes", "treatments"] if word in query.lower()]) <= 1):
+            return {
+                "is_complex": False,
+                "sub_questions": [query],
+                "original_query": query
+            }
+
+        # Handle different query types
+        sub_questions = []
+        if interpretation["query_type"] == "comparative":
+            sub_questions = self._decompose_comparative(query, interpretation["entities"])
+        elif interpretation["query_type"] == "causal":
+            sub_questions = self._decompose_causal(query, interpretation["entities"])
+        elif interpretation["query_type"] == "temporal":
+            sub_questions = self._decompose_temporal(query, interpretation["entities"])
+        else:
+            # Check for multi-part queries
+            if (len(interpretation["entities"]) > 1 or
+                any(word in query.lower() for word in ["vs", "compared"]) or
+                len([word for word in ["symptoms", "causes", "treatments"] if word in query.lower()]) > 1):
+                sub_questions = self._decompose_multi_part(query, interpretation["entities"])
+
+        result = {
+            "is_complex": len(sub_questions) > 1,
+            "sub_questions": sub_questions if sub_questions else [query],
+            "original_query": query
+        }
         
+        self.logger.info(f"Decomposed query: {result}")
+        return result
+    
+    def _decompose_comparative(self, query: str, entities: List[str]) -> List[str]:
+        """Decompose a comparative query into sub-questions"""
         sub_questions = []
         
-        # Create a simple definition question for each entity
-        for entity in entities:
-            sub_q = {
-                'text': f"What is {entity}?",
-                'entities': [entity],
-                'intent': {'type': 'definition', 'confidence': 0.9},
-                'complexity': 'simple',
-                'parent_query': query_text,
-                'type': 'definition'
-            }
-            sub_questions.append(sub_q)
+        # Extract the aspects being compared (e.g., symptoms, treatments)
+        aspects = []
+        if "symptom" in query.lower():
+            aspects.append("symptoms")
+        if "treatment" in query.lower() or "treat" in query.lower():
+            aspects.append("treatments")
+        if "cause" in query.lower():
+            aspects.append("causes")
         
-        # If it's a comparison intent, add relationship questions
-        if intent.get('type') == 'comparison' and len(entities) >= 2:
-            for i in range(len(entities)):
-                for j in range(i + 1, len(entities)):
-                    sub_q = {
-                        'text': f"What is the relationship between {entities[i]} and {entities[j]}?",
-                        'entities': [entities[i], entities[j]],
-                        'intent': {'type': 'relationship', 'confidence': 0.8},
-                        'complexity': 'simple',
-                        'parent_query': query_text,
-                        'type': 'relationship'
-                    }
-                    sub_questions.append(sub_q)
+        # If no specific aspects mentioned, default to symptoms
+        if not aspects:
+            aspects = ["symptoms"]
+        
+        # Use the entities directly if available
+        if len(entities) >= 2:
+            for aspect in aspects:
+                for entity in entities:
+                    if aspect == "symptoms":
+                        sub_questions.append(f"What are the symptoms of {entity}?")
+                    elif aspect == "treatments":
+                        sub_questions.append(f"What are the treatments for {entity}?")
+                    elif aspect == "causes":
+                        sub_questions.append(f"What are the causes of {entity}?")
+        else:
+            # Clean the query by removing comparison words
+            clean_query = re.sub(r'\b(compare|vs|versus)\b', '', query, flags=re.IGNORECASE)
+            
+            # Split the query into parts
+            parts = re.split(r'\band\b', clean_query, flags=re.IGNORECASE)
+            conditions = [part.strip() for part in parts if part.strip()]
+            
+            # Generate sub-questions for each aspect and condition
+            for aspect in aspects:
+                for condition in conditions:
+                    # Extract the main entity from the condition
+                    entity = self._extract_main_entity(condition)
+                    if entity:
+                        if aspect == "symptoms":
+                            sub_questions.append(f"What are the symptoms of {entity}?")
+                        elif aspect == "treatments":
+                            sub_questions.append(f"What are the treatments for {entity}?")
+                        elif aspect == "causes":
+                            sub_questions.append(f"What are the causes of {entity}?")
         
         return sub_questions
     
-    def _prioritize_sub_questions(self, sub_questions):
-        """
-        Prioritize sub-questions for efficient processing.
-        
-        Args:
-            sub_questions: List of generated sub-questions
+    def _decompose_causal(self, query: str, entities: List[str]) -> List[str]:
+        """Decompose causal queries into sub-questions"""
+        sub_questions = []
+        if len(entities) >= 2:
+            effect = entities[0]
+            cause = entities[1]
+            sub_questions.append(f"What causes {effect}?")
+            sub_questions.append(f"What is the relationship between {effect} and {cause}?")
+        return sub_questions
+    
+    def _decompose_temporal(self, query: str, entities: List[str]) -> List[str]:
+        """Decompose temporal queries into sub-questions"""
+        sub_questions = []
+        if entities:
+            entity = entities[0]
+            sub_questions.append(f"What are the symptoms of {entity}?")
+            sub_questions.append(f"What is the timeline of {entity} symptoms?")
+        return sub_questions
+    
+    def _decompose_multi_part(self, query: str, entities: List[str]) -> List[str]:
+        """Decompose multi-part queries into sub-questions"""
+        sub_questions = []
+        if entities:
+            entity = entities[0]
+            # Check for multiple aspects in the query
+            aspects = []
+            if "symptoms" in query.lower():
+                aspects.append("symptoms")
+            if "causes" in query.lower():
+                aspects.append("causes")
+            if "treatments" in query.lower():
+                aspects.append("treatments")
             
-        Returns:
-            Prioritized list of sub-questions
-        """
-        # Simple priority rules for Phase 1:
-        # 1. Definition questions first (to establish basic understanding)
-        # 2. Relationship questions next
-        # 3. Other questions last
+            # Generate a sub-question for each aspect
+            for aspect in aspects:
+                if aspect == "symptoms":
+                    sub_questions.append(f"What are the symptoms of {entity}?")
+                elif aspect == "causes":
+                    sub_questions.append(f"What are the causes of {entity}?")
+                elif aspect == "treatments":
+                    sub_questions.append(f"What are the treatments for {entity}?")
+            
+            # Handle comparative aspects if present
+            if "vs" in query.lower() or "compared" in query.lower():
+                parts = query.lower().split("vs" if "vs" in query.lower() else "compared")
+                if len(parts) == 2:
+                    groups = [p.strip() for p in parts]
+                    for group in groups:
+                        sub_questions.append(f"What are the symptoms of {entity} in {group}?")
+        return sub_questions
+    
+    def _extract_main_entity(self, text: str) -> str:
+        """Extract the main entity from a text fragment"""
+        # Remove common question words and verbs
+        text = re.sub(r'\b(what|how|when|where|why|are|is|do|does|did)\b', '', text, flags=re.IGNORECASE)
+        text = re.sub(r'\b(symptoms|treatments|causes|of|for|compare|vs|versus)\b', '', text, flags=re.IGNORECASE)
         
-        definitions = []
-        relationships = []
-        others = []
+        # Clean up the text
+        text = text.strip()
+        text = re.sub(r'\s+', ' ', text)
         
-        for q in sub_questions:
-            q_type = q.get('type', '')
-            if q_type == 'definition':
-                definitions.append(q)
-            elif q_type == 'relationship':
-                relationships.append(q)
-            else:
-                others.append(q)
-        
-        # Combine in priority order
-        return definitions + relationships + others 
+        return text 

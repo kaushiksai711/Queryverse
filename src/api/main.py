@@ -1,100 +1,120 @@
 """
-Main API server for the FAQ Chatbot system.
+Main API server for the medical chatbot.
 
-This module sets up the FastAPI server for the chatbot system,
-providing endpoints for chat interactions and feedback.
+This module provides the FastAPI application and routes
+for the medical chatbot API.
 """
 
-from fastapi import FastAPI, HTTPException, Depends, Request
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-import uvicorn
-import logging
-from src.utils.logger import setup_logger
-from src.utils.config import load_config
-from src.agents.orchestrator import Orchestrator
-from src.agents.retrieval_agent import RetrievalAgent
+from pydantic import BaseModel
+from typing import Dict, Any, Optional
+
 from src.agents.query_interpreter import QueryInterpreter
-from src.knowledge.graph_manager import GraphManager
-from src.knowledge.embedding_service import EmbeddingService
+from src.agents.query_decomposer import QueryDecomposer
+from src.agents.retrieval_agent import RetrievalAgent
+from src.agents.orchestrator import Orchestrator
+from src.db.neo4j_connector import Neo4jConnector
+from src.db.qdrant_connector import QdrantConnector
+from src.db.mongodb_connector import MongoDBConnector
 from src.rendering.text_renderer import TextRenderer
+from src.utils.config import Config
+from src.utils.logger import setup_logger
 
-# Setup logger
-logger = setup_logger(__name__)
+# Initialize components
+config = Config()
+logger = setup_logger("api")
 
-# Initialize app
+# Initialize database connectors
+neo4j = Neo4jConnector(
+    uri=config.neo4j_uri,
+    user=config.neo4j_user,
+    password=config.neo4j_password
+)
+
+qdrant = QdrantConnector(
+    url=config.qdrant_url,
+    api_key=config.qdrant_api_key
+)
+
+mongodb = MongoDBConnector(
+    uri=config.mongodb_uri,
+    db_name=config.mongodb_db
+)
+
+# Initialize agents
+query_interpreter = QueryInterpreter()
+query_decomposer = QueryDecomposer(query_interpreter)
+retrieval_agent = RetrievalAgent(neo4j, qdrant, mongodb)
+orchestrator = Orchestrator(query_interpreter, query_decomposer, retrieval_agent)
+text_renderer = TextRenderer()
+
+# Create FastAPI app
 app = FastAPI(
-    title="FAQ Chatbot API",
-    description="API for the FAQ Chatbot with Knowledge Retrieval",
-    version="0.1.0"
+    title="Medical Chatbot API",
+    description="API for the medical chatbot system",
+    version="1.0.0"
 )
 
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # For development, restrict in production
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Global components
-config = None
-orchestrator = None
+# Request models
+class ChatRequest(BaseModel):
+    query: str
+    context: Optional[Dict[str, Any]] = None
 
-@app.on_event("startup")
-async def startup_event():
-    """Initialize components on startup."""
-    global config, orchestrator
-    logger.info("Starting up the API server")
+class ChatResponse(BaseModel):
+    response: str
+    sources: list[str]
+    status: str
+
+@app.post("/chat", response_model=ChatResponse)
+async def chat(request: ChatRequest):
+    """
+    Process a chat query and return a response.
     
+    Args:
+        request: Chat request containing query and optional context
+        
+    Returns:
+        Chat response with formatted text and sources
+    """
     try:
-        # Load configuration
-        config = load_config()
+        # Process the query through the orchestrator
+        result = await orchestrator.process(request.query, request.context)
         
-        # Initialize components
-        graph_manager = GraphManager()
-        embedding_service = EmbeddingService()
-        query_interpreter = QueryInterpreter()
-        retrieval_agent = RetrievalAgent(graph_manager, embedding_service)
-        text_renderer = TextRenderer()
+        # Format the response
+        formatted_response = text_renderer.format_response(result)
         
-        # Initialize orchestrator
-        orchestrator = Orchestrator(
-            query_interpreter=query_interpreter,
-            retrieval_agent=retrieval_agent,
-            text_renderer=text_renderer
+        return ChatResponse(
+            response=formatted_response,
+            sources=result.get("sources", []),
+            status=result.get("status", "success")
         )
-        
-        logger.info("Components initialized successfully")
     except Exception as e:
-        logger.error(f"Error during startup: {str(e)}")
-        raise
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Clean up resources on shutdown."""
-    logger.info("Shutting down the API server")
-    # Any cleanup code would go here
-
-@app.get("/")
-async def root():
-    """Root endpoint providing basic information."""
-    return {
-        "message": "FAQ Chatbot API is running",
-        "version": "0.1.0",
-        "status": "healthy"
-    }
+        logger.error(f"Error processing chat request: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint."""
-    return {"status": "healthy"}
-
-# Import and include routers
-from src.api.chat_routes import router as chat_router
-
-# Include routers
-app.include_router(chat_router, prefix="/api/chat", tags=["chat"])
-
-if __name__ == "__main__":
-    uvicorn.run("src.api.main:app", host="0.0.0.0", port=8000, reload=True) 
+    """
+    Health check endpoint.
+    
+    Returns:
+        Status of the API and connected services
+    """
+    return {
+        "status": "healthy",
+        "services": {
+            "neo4j": neo4j.is_connected(),
+            "qdrant": qdrant.is_connected(),
+            "mongodb": mongodb.is_connected()
+        }
+    } 

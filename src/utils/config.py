@@ -1,118 +1,102 @@
 """
-Configuration loader utility.
+Configuration manager for the application.
 
-This module provides functionality for loading and validating
-configuration settings for the FAQ Chatbot system.
+This module provides functionality for loading and managing
+configuration settings from environment variables and config files.
 """
 
 import os
-import json
-import logging
-from typing import Dict, Any, Optional
+from typing import Dict, Any
+from dotenv import load_dotenv
+from src.utils.logger import setup_logger
 
-# Default configuration
-DEFAULT_CONFIG = {
-    "api": {
-        "host": "0.0.0.0",
-        "port": 8000,
-        "debug": True
-    },
-    "logging": {
-        "level": "INFO",
-        "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-    },
-    "database": {
-        "neo4j": {
-            "uri": "mock://localhost:7687",
-            "user": "neo4j",
-            "password": "password"
-        },
-        "qdrant": {
-            "url": "mock://localhost:6333",
-            "collection_name": "knowledge"
-        }
-    },
-    "retrieval": {
-        "top_k": 5,
-        "min_confidence": 0.5
-    }
-}
+logger = setup_logger("config")
 
-def load_config(config_path: Optional[str] = None) -> Dict[str, Any]:
+class Config:
     """
-    Load configuration from a file or environment variables,
-    falling back to default values if not specified.
+    Manages application configuration.
     
-    Args:
-        config_path: Optional path to a JSON configuration file
+    Responsibilities:
+    - Load environment variables
+    - Provide default values
+    - Validate configuration
+    - Access configuration values
+    """
+    
+    def __init__(self):
+        """Initialize the configuration manager"""
+        # Load environment variables from .env file
+        load_dotenv()
         
-    Returns:
-        Configuration dictionary
-    """
-    config = DEFAULT_CONFIG.copy()
+        # Database configuration
+        self.neo4j_uri = os.getenv("NEO4J_URI", "bolt://localhost:7687")
+        self.neo4j_user = os.getenv("NEO4J_USER", "neo4j")
+        self.neo4j_password = os.getenv("NEO4J_PASSWORD", "password")
+        
+        self.qdrant_url = os.getenv("QDRANT_URL", "http://localhost:6333")
+        self.qdrant_api_key = os.getenv("QDRANT_API_KEY", "")
+        
+        self.mongodb_uri = os.getenv("MONGODB_URI", "mongodb://localhost:27017")
+        self.mongodb_db = os.getenv("MONGODB_DB", "medical_chatbot")
+        
+        # API configuration
+        self.api_host = os.getenv("API_HOST", "0.0.0.0")
+        self.api_port = int(os.getenv("API_PORT", "8000"))
+        
+        # Model configuration
+        self.model_name = os.getenv("MODEL_NAME", "sentence-transformers/all-MiniLM-L6-v2")
+        
+        # Logging configuration
+        self.log_level = os.getenv("LOG_LEVEL", "INFO")
     
-    # Try to load from file if specified
-    if config_path and os.path.exists(config_path):
-        try:
-            with open(config_path, 'r') as f:
-                file_config = json.load(f)
-                # Update the default config with file values
-                _update_nested_dict(config, file_config)
-            logging.info(f"Configuration loaded from {config_path}")
-        except Exception as e:
-            logging.warning(f"Error loading config from {config_path}: {str(e)}")
+    def validate(self) -> bool:
+        """
+        Validate the configuration.
+        
+        Returns:
+            True if configuration is valid
+        """
+        # Check required environment variables
+        required_vars = [
+            "NEO4J_URI", "NEO4J_USER", "NEO4J_PASSWORD",
+            "QDRANT_URL",
+            "MONGODB_URI", "MONGODB_DB"
+        ]
+        
+        missing_vars = [var for var in required_vars if not os.getenv(var)]
+        if missing_vars:
+            logger.warning(f"Missing required environment variables: {', '.join(missing_vars)}")
+            return False
+        
+        return True
     
-    # Override with environment variables
-    _override_from_env(config)
+    def get_database_config(self) -> Dict[str, Any]:
+        """Get database configuration"""
+        return {
+            "neo4j": {
+                "uri": self.neo4j_uri,
+                "user": self.neo4j_user,
+                "password": self.neo4j_password
+            },
+            "qdrant": {
+                "url": self.qdrant_url,
+                "api_key": self.qdrant_api_key
+            },
+            "mongodb": {
+                "uri": self.mongodb_uri,
+                "db_name": self.mongodb_db
+            }
+        }
     
-    return config
-
-def _update_nested_dict(base_dict: Dict[str, Any], update_dict: Dict[str, Any]) -> None:
-    """
-    Update a nested dictionary with values from another dictionary.
+    def get_api_config(self) -> Dict[str, Any]:
+        """Get API configuration"""
+        return {
+            "host": self.api_host,
+            "port": self.api_port
+        }
     
-    Args:
-        base_dict: Base dictionary to update
-        update_dict: Dictionary with values to update
-    """
-    for key, value in update_dict.items():
-        if (
-            key in base_dict and 
-            isinstance(base_dict[key], dict) and 
-            isinstance(value, dict)
-        ):
-            _update_nested_dict(base_dict[key], value)
-        else:
-            base_dict[key] = value
-
-def _override_from_env(config: Dict[str, Any], prefix: str = "CHATBOT_") -> None:
-    """
-    Override configuration values from environment variables.
-    
-    Environment variables should be in the format:
-    CHATBOT_SECTION_SUBSECTION_KEY=value
-    
-    Args:
-        config: Configuration dictionary to update
-        prefix: Prefix for environment variables
-    """
-    for env_name, env_value in os.environ.items():
-        if env_name.startswith(prefix):
-            # Remove prefix and split into parts
-            config_path = env_name[len(prefix):].lower().split('_')
-            
-            # Navigate to the correct level in the config
-            current = config
-            for part in config_path[:-1]:
-                if part not in current:
-                    current[part] = {}
-                current = current[part]
-            
-            # Set the value (convert to appropriate type if possible)
-            key = config_path[-1]
-            try:
-                # Try to parse as JSON for complex types
-                current[key] = json.loads(env_value)
-            except json.JSONDecodeError:
-                # If not valid JSON, use the string value
-                current[key] = env_value 
+    def get_model_config(self) -> Dict[str, Any]:
+        """Get model configuration"""
+        return {
+            "name": self.model_name
+        } 
