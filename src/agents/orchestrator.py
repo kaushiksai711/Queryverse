@@ -7,10 +7,10 @@ and renderer components.
 """
 
 from typing import Dict, Any
-from src.utils.logger import setup_logger
-from src.agents.query_interpreter import QueryInterpreter
-from src.agents.query_decomposer import QueryDecomposer
-from src.agents.retrieval_agent import RetrievalAgent
+from utils.logger import setup_logger
+from agents.query_interpreter import QueryInterpreter
+from agents.query_decomposer import QueryDecomposer
+from agents.retrieval_agent import RetrievalAgent
 
 class Orchestrator:
     """
@@ -32,73 +32,127 @@ class Orchestrator:
     
     async def process_query(self, query: str) -> Dict[str, Any]:
         """
-        Process a user query through the complete workflow.
+        Process a user query through the workflow.
         
         Args:
             query: The user's query string
             
         Returns:
-            Dict containing processing results including:
-            - type: The type of query (single or complex)
-            - query: The original query
-            - interpretation: The query interpretation
-            - sub_questions: List of decomposed sub-questions (if complex)
-            - results: List of results for each sub-question (if complex)
-            - knowledge: Retrieved knowledge (if single)
-            - response: The final response text
-            - sources: List of sources used for the response
+            Dict containing the response and metadata
         """
         try:
-            # Step 1: Interpret the query
+            # Interpret the query
             interpretation = await self.query_interpreter.interpret(query)
-            self.logger.info(f"Query interpretation: {interpretation}")
             
-            # Step 2: Decompose the query if complex
-            decomposition = await self.query_decomposer.decompose(query)
-            
-            if decomposition["is_complex"]:
-                # Process complex query
-                results = []
+            # If query is complex, decompose it
+            if interpretation.get("is_complex", False):
+                sub_queries = await self.query_interpreter.decompose_query(query)
                 responses = []
-                all_sources = set()
-                for sub_question in decomposition["sub_questions"]:
-                    sub_result = await self.retrieval_agent.retrieve(sub_question)
-                    results.append({
-                        "question": sub_question,
-                        "knowledge": sub_result
-                    })
-                    if "response" in sub_result:
-                        responses.append(sub_result["response"])
-                    if "sources" in sub_result:
-                        all_sources.update(sub_result["sources"])
+                
+                for sub_query in sub_queries:
+                    # Process each sub-query
+                    knowledge = await self.retrieval_agent.retrieve(sub_query)
+                    if knowledge.get("status") == "success":
+                        responses.append(self._format_response(knowledge))
                 
                 return {
-                    "type": "complex",
-                    "query": query,
-                    "interpretation": interpretation,
-                    "sub_questions": decomposition["sub_questions"],
-                    "results": results,
-                    "response": " ".join(responses) if responses else "No information found",
-                    "sources": list(all_sources)
+                    "status": "success",
+                    "response": "\n\n".join(responses),
+                    "metadata": {
+                        "original_query": query,
+                        "interpretation": interpretation,
+                        "sub_queries": sub_queries
+                    }
+                }
+            
+            # Process single query
+            knowledge = await self.retrieval_agent.retrieve(query)
+            
+            if knowledge.get("status") == "success":
+                response = self._format_response(knowledge)
+                return {
+                    "status": "success",
+                    "response": response,
+                    "metadata": {
+                        "original_query": query,
+                        "interpretation": interpretation
+                    }
                 }
             else:
-                # Process single query
-                knowledge = await self.retrieval_agent.retrieve(query)
-                
                 return {
-                    "type": "single",
-                    "query": query,
-                    "interpretation": interpretation,
-                    "knowledge": knowledge,
-                    "response": knowledge.get("response", "No information found"),
-                    "sources": knowledge.get("sources", [])
+                    "status": "error",
+                    "response": "Error processing query",
+                    "error": knowledge.get("error", "Unknown error")
                 }
-            
+                
         except Exception as e:
             self.logger.error(f"Error processing query: {str(e)}")
             return {
-                "error": str(e),
-                "query": query,
-                "response": f"Error processing query: {str(e)}",
-                "sources": []
-            } 
+                "status": "error",
+                "response": "Error processing query",
+                "error": str(e)
+            }
+            
+    def _format_response(self, knowledge: Dict[str, Any]) -> str:
+        """
+        Format the knowledge into a readable response.
+        
+        Args:
+            knowledge: Dict containing retrieved knowledge
+            
+        Returns:
+            Formatted response string
+        """
+        if not knowledge.get("knowledge"):
+            return "No information found."
+            
+        knowledge_data = knowledge["knowledge"]
+        
+        # If knowledge is a list of results
+        if isinstance(knowledge_data, list):
+            formatted_responses = []
+            
+            for item in knowledge_data:
+                if isinstance(item, dict):
+                    content = item.get("content", "")
+                    metadata = item.get("metadata", {})
+                    source = item.get("source", "unknown")
+                    
+                    # Try to parse content if it's a string representation of a dict
+                    try:
+                        if isinstance(content, str) and content.startswith("{"):
+                            content_dict = eval(content)
+                            if isinstance(content_dict, dict):
+                                # Format disease information
+                                if "disease" in content_dict and "description" in content_dict:
+                                    response = f"{content_dict['disease']}: {content_dict['description']}"
+                                    
+                                    # Add relationships if present
+                                    if "relationships" in content_dict:
+                                        for rel in content_dict["relationships"]:
+                                            if isinstance(rel, dict):
+                                                rel_type = rel.get("type", "")
+                                                rel_node = rel.get("node", {})
+                                                if rel_type and rel_node:
+                                                    node_name = rel_node.get("name", "")
+                                                    node_desc = rel_node.get("description", "")
+                                                    if node_name and node_desc:
+                                                        response += f"\n{rel_type}: {node_name} - {node_desc}"
+                                    
+                                    formatted_responses.append(response)
+                                else:
+                                    formatted_responses.append(str(content_dict))
+                            else:
+                                formatted_responses.append(content)
+                        else:
+                            formatted_responses.append(content)
+                    except:
+                        formatted_responses.append(content)
+                else:
+                    formatted_responses.append(str(item))
+            
+            # Join all responses with newlines
+            return "\n\n".join(formatted_responses)
+        
+        # If knowledge is a string
+        return str(knowledge_data) 

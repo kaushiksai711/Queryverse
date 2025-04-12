@@ -51,16 +51,9 @@ class CLIInterface:
             progress.add_task(description="Initializing components...", total=None)
             
             # Initialize database connectors
-            self.neo4j = Neo4jConnector(
-                uri=os.getenv("NEO4J_URI"),
-                user=os.getenv("NEO4J_USER"),
-                password=os.getenv("NEO4J_PASSWORD")
-            )
+            self.neo4j = Neo4jConnector()
             
-            self.qdrant = QdrantConnector(
-                url=os.getenv("QDRANT_URL"),
-                api_key=os.getenv("QDRANT_API_KEY")
-            )
+            self.qdrant = QdrantConnector()
             
             self.mongodb = MongoDBConnector(
                 uri=os.getenv("MONGODB_URI"),
@@ -102,7 +95,7 @@ class CLIInterface:
                 
                 # Process the query through the orchestrator
                 result = await self.orchestrator.process_query(query)
-                
+                print(result, "resultawdasdsad")
                 # Format the response
                 if result and "response" in result:
                     response = result["response"]

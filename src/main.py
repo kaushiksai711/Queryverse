@@ -1,63 +1,33 @@
 """
-Main application entry point with mock components for demonstration.
-This serves as the entry point for the Phase 1 demo of the FAQ Chatbot system.
+Main application entry point for the MeTTa FAQ Chatbot demo.
 """
 
-from src.agents.orchestrator import Orchestrator
-from src.agents.retrieval_agent import RetrievalAgent
-from src.agents.query_interpreter import QueryInterpreter
-from src.knowledge.graph_manager import GraphManager
-from src.knowledge.embedding_service import EmbeddingService
-from src.rendering.text_renderer import TextRenderer
-import logging
-from src.utils.logger import setup_logger
-from src.utils.config import load_config
-
-# Setup logging
-logger = setup_logger(__name__)
+#from src.agents.metta_chatbot import MeTTaFAQChatbot
 
 def main():
     """
-    Main function to demonstrate the basic functionality of the FAQ Chatbot.
+    Main function to demonstrate the MeTTa FAQ Chatbot functionality.
     """
-    logger.info("Starting FAQ Chatbot Demo")
+    print("Starting MeTTa FAQ Chatbot Demo")
+    print("===============================")
     
-    # Load configuration
-    config = load_config()
+    # Initialize the chatbot with the knowledge base file
+    chatbot = MeTTaFAQChatbot()
     
-    # Initialize components with mock implementations
-    graph_manager = GraphManager()
-    embedding_service = EmbeddingService()
-    
-    # Initialize agents
-    query_interpreter = QueryInterpreter()
-    retrieval_agent = RetrievalAgent(graph_manager, embedding_service)
-    
-    # Initialize renderers
-    text_renderer = TextRenderer()
-    
-    # Initialize orchestrator
-    orchestrator = Orchestrator(
-        query_interpreter=query_interpreter,
-        retrieval_agent=retrieval_agent,
-        text_renderer=text_renderer
-    )
-    
-    # Demo queries
-    demo_queries = [
-        "What is a knowledge graph?",
-        "How does semantic search work?",
-        "What are the benefits of vector embeddings?",
+    # Example queries to test the knowledge base
+    questions = [
+        "What is diabetes?",
+        "How is type 2 diabetes treated?",
+        "What are the symptoms of diabetes?",
+        "What complications can diabetes cause?",
+        "What are the risk factors for type 2 diabetes?"
     ]
     
-    # Process demo queries
-    for query in demo_queries:
-        logger.info(f"Processing query: {query}")
-        response = orchestrator.process_query(query)
-        print(f"\nQ: {query}")
-        print(f"A: {response}\n")
-    
-    logger.info("Demo completed")
+    for question in questions:
+        print(f"\nQ: {question}")
+        response = chatbot.process_question(question)
+        print(f"A: {response['response']}")
+        print("\nIdentified concepts:", response['concepts_identified'])
 
 if __name__ == "__main__":
     main() 

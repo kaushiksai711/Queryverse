@@ -9,6 +9,7 @@ or the demo with mock components.
 import argparse
 import os
 import sys
+from dotenv import load_dotenv
 
 def run_api():
     """Run the FastAPI server."""
@@ -32,13 +33,23 @@ def run_tests():
     print("Running tests...")
     pytest.main(["-v", "tests/"])
 
+def run_cli():
+    """Run the CLI interface."""
+    from cli.cli_interface import main as cli_main
+    
+    print("Starting CLI interface...")
+    cli_main()
+
 if __name__ == "__main__":
+    # Load environment variables
+    load_dotenv()
+    
     parser = argparse.ArgumentParser(description="Run the FAQ Chatbot system")
     
     parser.add_argument(
         "mode", 
-        choices=["api", "demo", "test"],
-        help="Run mode: 'api' to start the API server, 'demo' to run the demo, 'test' to run tests"
+        choices=["api", "demo", "test", "cli"],
+        help="Run mode: 'api' to start the API server, 'demo' to run the demo, 'test' to run tests, 'cli' to run CLI"
     )
     
     args = parser.parse_args()
@@ -52,4 +63,6 @@ if __name__ == "__main__":
     elif args.mode == "demo":
         run_demo()
     elif args.mode == "test":
-        run_tests() 
+        run_tests()
+    elif args.mode == "cli":
+        run_cli() 

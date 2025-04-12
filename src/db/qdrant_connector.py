@@ -1,354 +1,268 @@
 """
-Qdrant connector for vector database functionality.
+Qdrant vector database connector for semantic search.
 
-This module provides a real implementation of a Qdrant connector
-that connects to a Qdrant vector database instance.
+This module provides a connector for the Qdrant vector database,
+enabling semantic search capabilities for the medical chatbot.
 """
 
-import logging
-import numpy as np
-from typing import List, Dict, Any, Optional, Union
+from typing import List, Dict, Any, Optional
 from qdrant_client import QdrantClient
-from qdrant_client.http.models import (
-    Distance, VectorParams, PointStruct, Filter, FieldCondition,
-    Range, MatchValue, CollectionInfo
-)
-
-logger = logging.getLogger(__name__)
+from qdrant_client.http import models
+from qdrant_client.http.exceptions import UnexpectedResponse
+from src.utils.logger import setup_logger
+import os
 
 class QdrantConnector:
     """
     Connector for Qdrant vector database.
     
-    Responsibilities:
-    - Connect to Qdrant vector database
-    - Upload and manage vector embeddings
-    - Perform vector similarity search
-    - Associate metadata with vectors
+    This class handles all interactions with the Qdrant vector database,
+    including connection management, collection operations, and vector search.
     """
     
-    def __init__(self, url: str, api_key: Optional[str] = None, collection_name: str = "medical_knowledge"):
+    def __init__(self, url: str = None, api_key: str = None):
         """
-        Initialize the Qdrant connector.
+        Initialize the Qdrant connector with configuration from parameters or environment variables.
         
         Args:
-            url: Qdrant service URL
-            api_key: Optional API key for authentication
-            collection_name: Collection name to use
+            url: Optional Qdrant server URL. If not provided, reads from QDRANT_URL env var
+            api_key: Optional Qdrant API key. If not provided, reads from QDRANT_API_KEY env var
         """
-        self.url = url or "https://90c18eba-c9f7-489f-9371-b46eea57639f.eu-central-1-0.aws.cloud.qdrant.io:6333"
-        self.api_key = api_key or "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2Nlc3MiOiJtIn0.4UBgGua3TwRyilImpsJkdkD0spqfhfyr4xld3aASbOU"
-        self.collection_name = collection_name or "medical_knowledge"
+        self.logger = setup_logger("qdrant_connector")
         self.client = None
         self.connected = False
-        self.vector_size = 384  # Default for SentenceTransformers models
         
-        logger.info(f"Initializing Qdrant connector to {self.url} with collection {self.collection_name}")
+        # Get configuration from parameters or environment variables
+        self.url = url or os.getenv("QDRANT_URL", "https://90c18eba-c9f7-489f-9371-b46eea57639f.eu-central-1-0.aws.cloud.qdrant.io:6333")
+        self.api_key = api_key or os.getenv("QDRANT_API_KEY","eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2Nlc3MiOiJtIn0.9n7a9Lqq9lUcJqppvoLQ0bb24bkhRAkx3Mvj3pIXs8k")
+        self.collection_name = os.getenv("QDRANT_COLLECTION", "medical_knowledge")
+        print(self.url,self.api_key)
+        # Vector configuration
+        self.vector_size = 384  # Size for all-MiniLM-L6-v2 embeddings
+        self.distance = models.Distance.COSINE
+        
+        # ID mapping to track string IDs to integer IDs
+        self.id_mapping = {}
+        
+        self.logger.info(f"Initializing Qdrant connector with URL: {self.url}")
+    
+    def connect(self) -> bool:
+        """
+        Establish connection to Qdrant server.
+        
+        Returns:
+            bool: True if connection successful, False otherwise
+        """
+        try:
+            # Initialize Qdrant client with proper configuration
+            self.client = QdrantClient(
+                url=self.url,
+                api_key=self.api_key,
+                timeout=30.0,  # Increased timeout for initial connection
+                  # Use gRPC for better performance
+            )
+            
+            # Verify connection by getting collections
+            collections = self.client.get_collections()
+            self.logger.info(f"Connected to Qdrant. Found {len(collections.collections)} collections.")
+            
+            # Create collection if it doesn't exist
+            if not any(c.name == self.collection_name for c in collections.collections):
+                self._create_collection()
+            
+            self.connected = True
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Failed to connect to Qdrant: {str(e)}")
+            self.connected = False
+            return False
+    
+    def _create_collection(self) -> None:
+        """
+        Create the medical knowledge collection if it doesn't exist.
+        """
+        try:
+            self.client.create_collection(
+                collection_name=self.collection_name,
+                vectors_config=models.VectorParams(
+                    size=self.vector_size,
+                    distance=self.distance
+                )
+            )
+            self.logger.info(f"Created collection: {self.collection_name}")
+        except Exception as e:
+            self.logger.error(f"Failed to create collection: {str(e)}")
+            raise
     
     def is_connected(self) -> bool:
         """
         Check if the connector is connected to Qdrant.
         
         Returns:
-            True if connected, False otherwise
+            bool: True if connected, False otherwise
         """
-        return self.connected and self.client is not None
-    
-    def connect(self) -> bool:
-        """
-        Connect to Qdrant.
-        
-        Returns:
-            True if connection successful
-        """
+        if not self.connected or self.client is None:
+            return False
+            
         try:
-            self.client = QdrantClient(
-                url=self.url,
-                api_key=self.api_key
-            )
-            # Verify connection by getting collection info
-            self.client.get_collection(self.collection_name)
-            self.connected = True
-            logger.info("Connected to Qdrant")
+            # Simple health check
+            self.client.get_collections()
             return True
-        except Exception as e:
-            logger.error(f"Failed to connect to Qdrant: {str(e)}")
+        except Exception:
             self.connected = False
             return False
+    
+    def search(
+        self,
+        query_vector: List[float],
+        limit: int = 5,
+        score_threshold: float = 0.7
+    ) -> List[Dict[str, Any]]:
+        """
+        Search for similar vectors in the collection.
+        
+        Args:
+            query_vector: The query vector to search with
+            limit: Maximum number of results to return
+            score_threshold: Minimum similarity score threshold
+            
+        Returns:
+            List of search results with scores and payloads
+        """
+        if not self.is_connected():
+            raise ConnectionError("Not connected to Qdrant")
+        
+        try:
+            search_results = self.client.search(
+                collection_name=self.collection_name,
+                query_vector=query_vector,
+                limit=limit,
+                score_threshold=score_threshold
+            )
+            
+            return [
+                {
+                    "id": self.id_mapping.get(result.id, str(result.id)),  # Use mapping or fallback to string
+                    "score": result.score,
+                    "payload": result.payload
+                }
+                for result in search_results
+            ]
+            
+        except Exception as e:
+            self.logger.error(f"Search failed: {str(e)}")
+            raise
+    
+    def add_points(
+        self,
+        points: List[Dict[str, Any]],
+        batch_size: int = 100
+    ) -> None:
+        """
+        Add points to the collection in batches.
+        
+        Args:
+            points: List of points to add, each containing id, vector, and payload
+            batch_size: Number of points to add in each batch
+        """
+        if not self.is_connected():
+            raise ConnectionError("Not connected to Qdrant")
+        
+        try:
+            # Convert points to Qdrant format
+            qdrant_points = []
+            for point in points:
+                original_id = point["id"]
+                int_id = self._convert_id_to_int(original_id)
+                
+                # Store the mapping
+                self.id_mapping[int_id] = original_id
+                
+                qdrant_points.append(
+                    models.PointStruct(
+                        id=int_id,
+                        vector=point["vector"],
+                        payload=point["payload"]
+                    )
+                )
+            
+            # Add points in batches
+            for i in range(0, len(qdrant_points), batch_size):
+                batch = qdrant_points[i:i + batch_size]
+                self.client.upsert(
+                    collection_name=self.collection_name,
+                    points=batch
+                )
+            
+            self.logger.info(f"Added {len(points)} points to collection")
+            
+        except Exception as e:
+            self.logger.error(f"Failed to add points: {str(e)}")
+            raise
+    
+    def _convert_id_to_int(self, id_value: Any) -> int:
+        """
+        Convert an ID to an integer for Qdrant compatibility.
+        
+        Args:
+            id_value: The ID to convert
+            
+        Returns:
+            An integer ID
+        """
+        if isinstance(id_value, int):
+            return id_value
+        
+        # Convert string to integer using hash
+        return abs(hash(str(id_value))) % (2**63)  # Ensure it's a positive 64-bit integer
+    
+    def delete_points(self, point_ids: List[str]) -> None:
+        """
+        Delete points from the collection.
+        
+        Args:
+            point_ids: List of point IDs to delete
+        """
+        if not self.is_connected():
+            raise ConnectionError("Not connected to Qdrant")
+        
+        try:
+            # Convert string IDs to integers
+            int_point_ids = []
+            for pid in point_ids:
+                int_id = self._convert_id_to_int(pid)
+                int_point_ids.append(int_id)
+                # Remove from mapping
+                if int_id in self.id_mapping:
+                    del self.id_mapping[int_id]
+            
+            self.client.delete(
+                collection_name=self.collection_name,
+                points_selector=models.PointIdsList(
+                    points=int_point_ids
+                )
+            )
+            self.logger.info(f"Deleted {len(point_ids)} points from collection")
+            
+        except Exception as e:
+            self.logger.error(f"Failed to delete points: {str(e)}")
+            raise
+    
+    def close(self) -> None:
+        """
+        Close the connection to Qdrant.
+        """
+        if self.client:
+            self.client.close()
+            self.connected = False
+            self.logger.info("Closed connection to Qdrant")
     
     def disconnect(self) -> None:
         """
-        Disconnect from Qdrant.
+        Disconnect from Qdrant. Alias for close() to maintain consistency with other connectors.
         """
-        if self.client:
-            # Qdrant client doesn't have an explicit close method
-            # but we can reset the client and connection state
-            self.client = None
-            self.connected = False
-            logger.info("Disconnected from Qdrant")
-    
-    def create_collection(self, vector_size: int = 384, distance: str = "Cosine") -> bool:
-        """
-        Create a new collection for vector storage.
-        
-        Args:
-            vector_size: Dimension of vectors
-            distance: Distance metric ("Cosine", "Euclid", or "Dot")
-            
-        Returns:
-            True if creation successful
-        """
-        if not self.connected or not self.client:
-            logger.warning("Not connected to Qdrant")
-            return False
-        
-        self.vector_size = vector_size
-        
-        try:
-            # Check if collection already exists
-            collections = self.client.get_collections()
-            if self.collection_name in [c.name for c in collections.collections]:
-                logger.info(f"Collection {self.collection_name} already exists")
-                return True
-            
-            # Map distance string to Distance enum
-            distance_map = {
-                "Cosine": "Cosine",
-                "Euclid": "Euclidean",
-                "Dot": "Dot"
-            }
-            distance_type = distance_map.get(distance, "Cosine")
-            
-            # Create collection with specified parameters
-            self.client.create_collection(
-                collection_name=self.collection_name,
-                vectors_config=VectorParams(size=vector_size, distance=distance_type)
-            )
-            logger.info(f"Created collection {self.collection_name} with vector size {vector_size}")
-            return True
-        except Exception as e:
-            logger.error(f"Error creating collection: {str(e)}")
-            return False
-    
-    def delete_collection(self) -> bool:
-        """
-        Delete the collection.
-        
-        Returns:
-            True if deletion successful
-        """
-        if not self.connected or not self.client:
-            logger.warning("Not connected to Qdrant")
-            return False
-        
-        try:
-            self.client.delete_collection(collection_name=self.collection_name)
-            logger.info(f"Deleted collection {self.collection_name}")
-            return True
-        except Exception as e:
-            logger.error(f"Error deleting collection: {str(e)}")
-            return False
-    
-    def get_collection_info(self) -> Optional[CollectionInfo]:
-        """
-        Get information about the collection.
-        
-        Returns:
-            Collection information or None if error
-        """
-        if not self.connected or not self.client:
-            logger.warning("Not connected to Qdrant")
-            return None
-        
-        try:
-            return self.client.get_collection(collection_name=self.collection_name)
-        except Exception as e:
-            logger.error(f"Error getting collection info: {str(e)}")
-            return None
-    
-    def upsert(self, id: str, vector: List[float], metadata: Optional[Dict[str, Any]] = None) -> bool:
-        """
-        Insert or update a vector in the collection.
-        
-        Args:
-            id: Unique identifier for the vector
-            vector: Vector to store
-            metadata: Associated metadata
-            
-        Returns:
-            True if operation successful
-        """
-        if not self.connected or not self.client:
-            logger.warning("Not connected to Qdrant")
-            return False
-        
-        try:
-            # Convert string ID to a unique integer ID if needed
-            point_id = id if isinstance(id, int) else hash(id) & 0xffffffff
-            
-            # Create point with vector and metadata
-            point = PointStruct(
-                id=point_id,
-                vector=vector,
-                payload=metadata or {}
-            )
-            
-            # Insert the point
-            self.client.upsert(
-                collection_name=self.collection_name,
-                points=[point]
-            )
-            
-            logger.debug(f"Upserted vector for ID: {id}")
-            return True
-        except Exception as e:
-            logger.error(f"Error upserting vector: {str(e)}")
-            return False
-    
-    def batch_upsert(self, items: List[Dict[str, Any]]) -> bool:
-        """
-        Insert or update multiple vectors in batch.
-        
-        Args:
-            items: List of dictionaries with id, vector, and metadata
-            
-        Returns:
-            True if operation successful
-        """
-        if not self.connected or not self.client:
-            logger.warning("Not connected to Qdrant")
-            return False
-        
-        try:
-            points = []
-            for item in items:
-                # Convert string ID to a unique integer ID if needed
-                point_id = item['id'] if isinstance(item['id'], int) else hash(item['id']) & 0xffffffff
-                
-                point = PointStruct(
-                    id=point_id,
-                    vector=item['vector'],
-                    payload=item.get('metadata', {})
-                )
-                points.append(point)
-            
-            # Insert the points in batch
-            self.client.upsert(
-                collection_name=self.collection_name,
-                points=points
-            )
-            
-            logger.info(f"Batch upserted {len(points)} vectors")
-            return True
-        except Exception as e:
-            logger.error(f"Error batch upserting vectors: {str(e)}")
-            return False
-    
-    def search(self, vector: List[float], top_k: int = 5, 
-              filters: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
-        """
-        Perform vector similarity search.
-        
-        Args:
-            vector: Query vector
-            top_k: Number of results to return
-            filters: Optional filters to apply
-            
-        Returns:
-            List of search results with similarity scores
-        """
-        if not self.connected or not self.client:
-            logger.warning("Not connected to Qdrant")
-            return []
-        
-        try:
-            # Convert filters to Qdrant filter format
-            qdrant_filter = self._convert_filters(filters) if filters else None
-            
-            # Perform search
-            search_results = self.client.search(
-                collection_name=self.collection_name,
-                query_vector=vector,
-                limit=top_k,
-                query_filter=qdrant_filter
-            )
-            
-            # Format results
-            results = []
-            for result in search_results:
-                result_dict = {
-                    "id": result.id,
-                    "score": result.score,
-                    "metadata": result.payload
-                }
-                results.append(result_dict)
-            
-            return results
-        except Exception as e:
-            logger.error(f"Error performing search: {str(e)}")
-            return []
-    
-    def _convert_filters(self, filters: Dict[str, Any]) -> Filter:
-        """
-        Convert simple filters to Qdrant filter format.
-        
-        Args:
-            filters: Dictionary of filter conditions
-            
-        Returns:
-            Qdrant Filter object
-        """
-        if not filters:
-            return None
-        
-        conditions = []
-        
-        for field, value in filters.items():
-            if isinstance(value, list):
-                # For list values, use any match
-                conditions.append(FieldCondition(
-                    key=field,
-                    match=MatchValue(any=value)
-                ))
-            elif isinstance(value, dict) and ('min' in value or 'max' in value):
-                # For range values
-                range_kwargs = {}
-                if 'min' in value:
-                    range_kwargs['gte'] = value['min']
-                if 'max' in value:
-                    range_kwargs['lte'] = value['max']
-                
-                conditions.append(FieldCondition(
-                    key=field,
-                    range=Range(**range_kwargs)
-                ))
-            else:
-                # For exact match
-                conditions.append(FieldCondition(
-                    key=field,
-                    match=MatchValue(value=value)
-                ))
-        
-        return Filter(must=conditions)
-    
-    def execute_medical_data_setup(self, vector_size: int = 384) -> bool:
-        """
-        Set up the collection for medical data vectors.
-        
-        Args:
-            vector_size: Dimension of the vectors
-            
-        Returns:
-            True if setup successful
-        """
-        if not self.connected:
-            logger.warning("Not connected to Qdrant")
-            return False
-        
-        try:
-            # Create or recreate the collection
-            self.vector_size = vector_size
-            return self.create_collection(vector_size=vector_size)
-        except Exception as e:
-            logger.error(f"Error setting up medical data collection: {str(e)}")
-            return False 
+        self.close()
+
+trial=QdrantConnector()
+trial.connect()
